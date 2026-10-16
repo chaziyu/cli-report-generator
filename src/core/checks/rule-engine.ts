@@ -62,15 +62,19 @@ export class RuleEngine {
     const adapter = vendorRegistry.get(vendorId);
     const parser = adapter?.getParser?.();
 
-    // Map command execution by command string and by vendor command ID
-    const executionByCommand = new Map<string, CommandExecutionInput>();
-    const parsedMetricsByCommandId = new Map<string, ExtractedMetricsValue>();
+    // Map command executions by command string and by vendor command ID (preserving all observations)
+    const executionsByCommand = new Map<string, CommandExecutionInput[]>();
+    const parsedMetricsByCommandId = new Map<
+      string,
+      Array<{ execution: CommandExecutionInput; metrics: ExtractedMetricsValue }>
+    >();
 
-    // Index executions
+    // Index all executions preserving observation order
     for (const exec of commandExecutions) {
       const cleanCmd = this.cleanCommand(exec.command);
-      executionByCommand.set(cleanCmd, exec);
-
+      const list = executionsByCommand.get(cleanCmd) || [];
+      list.push(exec);
+      executionsByCommand.set(cleanCmd, list);
 
       if (parser && exec.outputContent) {
         // Try matching against vendor command definitions to find command ID
@@ -83,7 +87,9 @@ export class RuleEngine {
             exec.outputContent
           );
           if (parsed.parseStatus === "SUCCESS") {
-            parsedMetricsByCommandId.set(matchedDef.id, parsed.metrics);
+            const mList = parsedMetricsByCommandId.get(matchedDef.id) || [];
+            mList.push({ execution: exec, metrics: parsed.metrics });
+            parsedMetricsByCommandId.set(matchedDef.id, mList);
           }
         }
       }
@@ -96,17 +102,17 @@ export class RuleEngine {
       const ruleHandler =
         vendorId === "fortigate" ? FORTIGATE_RULES[item.id] : undefined;
 
-      // Check if command execution exists for this checklist item
-      let matchedExecution: CommandExecutionInput | undefined;
+      // Check if command execution exists for this checklist item (preserving all observations)
+      let matchedExecutions: CommandExecutionInput[] = [];
       let matchedCommandId: string | undefined;
 
       if (item.commands.length > 0) {
         for (const cmdId of item.commands) {
           const cmdDef = adapter?.getCommands().find((c) => c.id === cmdId);
           if (cmdDef) {
-            const exec = executionByCommand.get(this.cleanCommand(cmdDef.command));
-            if (exec) {
-              matchedExecution = exec;
+            const execs = executionsByCommand.get(this.cleanCommand(cmdDef.command));
+            if (execs && execs.length > 0) {
+              matchedExecutions = execs;
               matchedCommandId = cmdId;
               break;
             }
@@ -114,14 +120,27 @@ export class RuleEngine {
         }
       }
 
-      if (ruleHandler) {
-        const metrics = matchedCommandId
-          ? parsedMetricsByCommandId.get(matchedCommandId)
-          : undefined;
+      const matchedExecution = matchedExecutions[matchedExecutions.length - 1]; // latest or primary observation
 
-        const finding = ruleHandler(metrics, {
-          hasExecution: Boolean(matchedExecution),
+      if (ruleHandler) {
+        const metricsEntries = matchedCommandId
+          ? parsedMetricsByCommandId.get(matchedCommandId) || []
+          : [];
+
+        const allMetrics = metricsEntries.map((m) => m.metrics);
+        const primaryMetrics =
+          metricsEntries.length > 0
+            ? metricsEntries[metricsEntries.length - 1].metrics
+            : undefined;
+
+        const finding = ruleHandler(primaryMetrics, {
+          hasExecution: matchedExecutions.length > 0,
           rawOutput: matchedExecution?.outputContent || undefined,
+          executions: matchedExecutions,
+          allOutputs: matchedExecutions
+            .map((e) => e.outputContent)
+            .filter((o): o is string => Boolean(o)),
+          allMetrics,
         });
 
         const checkResult = createNormalizedResult({
@@ -131,14 +150,15 @@ export class RuleEngine {
           commandId: matchedCommandId || item.commands[0] || undefined,
           rawOutputRef: matchedExecution?.id || undefined,
           extractedValues: {
-            ...((metrics as Record<string, unknown>) || {}),
+            ...((primaryMetrics as Record<string, unknown>) || {}),
             currentValue: finding.currentValue,
+            expectedValue: finding.expectedValue,
           },
           collectionState: finding.collectionState,
           evaluationStatus: finding.evaluationStatus,
           ruleId: finding.ruleId,
           remarks: finding.remarks,
-          evidenceRefs: matchedExecution ? [matchedExecution.id] : [],
+          evidenceRefs: matchedExecutions.map((e) => e.id),
           reviewRequired: finding.reviewRequired,
         });
 

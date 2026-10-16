@@ -83,7 +83,7 @@ describe("FortiGate Deterministic PM Rules", () => {
   describe("Rule: fg-hw-cpu (CPU Usage snapshot)", () => {
     const rule = FORTIGATE_RULES["fg-hw-cpu"];
 
-    it("evaluates CPU < 80% (79%) as PASS and notes current reading in remarks", () => {
+    it("evaluates instantaneous CPU < 80% (79%) as REVIEW (insufficient historical evidence) with reviewRequired: true", () => {
       const metrics: PerformanceMetrics = {
         cpuUserPct: 50,
         cpuSystemPct: 29,
@@ -95,10 +95,60 @@ describe("FortiGate Deterministic PM Rules", () => {
         memoryUtilizationPct: 40,
       };
       const res = rule(metrics, { hasExecution: true });
-      expect(res.evaluationStatus).toBe("PASS");
-      expect(res.reviewRequired).toBe(false);
+      expect(res.evaluationStatus).toBe("REVIEW");
+      expect(res.reviewRequired).toBe(true);
       expect(res.remarks).toContain("79%");
       expect(res.currentValue).toContain("79%");
+    });
+
+    it("evaluates historical average CPU < 80% as PASS with reviewRequired: false", () => {
+      const metrics: PerformanceMetrics = {
+        cpuUserPct: 20,
+        cpuSystemPct: 15,
+        cpuIdlePct: 65,
+        totalCpuUtilizationPct: 35,
+        memoryTotalBytes: 2048000,
+        memoryUsedBytes: 819200,
+        memoryFreeBytes: 1228800,
+        memoryUtilizationPct: 40,
+        isHistoricalAverage: true,
+      };
+      const res = rule(metrics, { hasExecution: true });
+      expect(res.evaluationStatus).toBe("PASS");
+      expect(res.reviewRequired).toBe(false);
+      expect(res.remarks).toContain("35%");
+    });
+
+    it("evaluates multiple instantaneous CPU observations preserving readings without invented timestamps", () => {
+      const metrics1: PerformanceMetrics = {
+        cpuUserPct: 10,
+        cpuSystemPct: 10,
+        cpuIdlePct: 80,
+        totalCpuUtilizationPct: 20,
+        memoryTotalBytes: 2048000,
+        memoryUsedBytes: 819200,
+        memoryFreeBytes: 1228800,
+        memoryUtilizationPct: 40,
+      };
+      const metrics2: PerformanceMetrics = {
+        cpuUserPct: 20,
+        cpuSystemPct: 15,
+        cpuIdlePct: 65,
+        totalCpuUtilizationPct: 35,
+        memoryTotalBytes: 2048000,
+        memoryUsedBytes: 819200,
+        memoryFreeBytes: 1228800,
+        memoryUtilizationPct: 40,
+      };
+      const res = rule(metrics1, {
+        hasExecution: true,
+        allMetrics: [metrics1, metrics2],
+      });
+      expect(res.evaluationStatus).toBe("REVIEW");
+      expect(res.reviewRequired).toBe(true);
+      expect(res.currentValue).toContain("20%");
+      expect(res.currentValue).toContain("35%");
+      expect(res.remarks).toContain("Captured 2 instantaneous CPU observations");
     });
 
     it("evaluates CPU >= 80% (80%) as FAIL with reviewRequired", () => {
@@ -128,7 +178,7 @@ describe("FortiGate Deterministic PM Rules", () => {
   describe("Rule: fg-hw-mem (Memory Usage)", () => {
     const rule = FORTIGATE_RULES["fg-hw-mem"];
 
-    it("evaluates Memory < 80% (45%) as PASS", () => {
+    it("evaluates instantaneous Memory < 80% (45%) as REVIEW (insufficient historical evidence) with reviewRequired: true", () => {
       const metrics: PerformanceMetrics = {
         cpuUserPct: 10,
         cpuSystemPct: 5,
@@ -140,7 +190,26 @@ describe("FortiGate Deterministic PM Rules", () => {
         memoryUtilizationPct: 45,
       };
       const res = rule(metrics, { hasExecution: true });
+      expect(res.evaluationStatus).toBe("REVIEW");
+      expect(res.reviewRequired).toBe(true);
+      expect(res.currentValue).toContain("45%");
+    });
+
+    it("evaluates historical average Memory < 80% as PASS", () => {
+      const metrics: PerformanceMetrics = {
+        cpuUserPct: 10,
+        cpuSystemPct: 5,
+        cpuIdlePct: 85,
+        totalCpuUtilizationPct: 15,
+        memoryTotalBytes: 2048000,
+        memoryUsedBytes: 921600,
+        memoryFreeBytes: 1126400,
+        memoryUtilizationPct: 45,
+        isHistoricalAverage: true,
+      };
+      const res = rule(metrics, { hasExecution: true });
       expect(res.evaluationStatus).toBe("PASS");
+      expect(res.reviewRequired).toBe(false);
       expect(res.currentValue).toContain("45%");
     });
 

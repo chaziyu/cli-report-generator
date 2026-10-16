@@ -53,18 +53,50 @@ none                   8192000    421040   7770960   5% /dev/shm
 
     const cpuResult = summary.results.find((r) => r.checkId === "fg-hw-cpu");
     expect(cpuResult).toBeDefined();
-    expect(cpuResult?.evaluationStatus).toBe("PASS");
+    // Instantaneous reading without historical proof requires review per PM requirement
+    expect(cpuResult?.evaluationStatus).toBe("REVIEW");
+    expect(cpuResult?.reviewRequired).toBe(true);
     expect(cpuResult?.extractedValues?.totalCpuUtilizationPct).toBe(1);
 
     const memResult = summary.results.find((r) => r.checkId === "fg-hw-mem");
     expect(memResult).toBeDefined();
-    expect(memResult?.evaluationStatus).toBe("PASS");
+    // Instantaneous reading without historical proof requires review per PM requirement
+    expect(memResult?.evaluationStatus).toBe("REVIEW");
+    expect(memResult?.reviewRequired).toBe(true);
     expect(memResult?.extractedValues?.memoryUtilizationPct).toBe(33);
 
     const diskResult = summary.results.find((r) => r.checkId === "fg-hw-disk");
     expect(diskResult).toBeDefined();
     expect(diskResult?.evaluationStatus).toBe("PASS");
     expect(diskResult?.extractedValues?.highestUsedPct).toBe(9);
+  });
+
+  it("preserves multiple observations for the same command in observation order", () => {
+    const summary = ruleEngine.evaluateDeviceChecks({
+      deviceId: "dev-01",
+      vendorId: "fortigate",
+      checklistDefinitions: FORTIGATE_CHECKLIST,
+      commandExecutions: [
+        {
+          id: "cmd-perf-1",
+          deviceId: "dev-01",
+          command: "get system performance status",
+          outputContent: `CPU states: 5% user 5% system 0% nice 90% idle\nMemory: 1000k total, 200k used (20%)`,
+        },
+        {
+          id: "cmd-perf-2",
+          deviceId: "dev-01",
+          command: "get system performance status",
+          outputContent: `CPU states: 10% user 15% system 0% nice 75% idle\nMemory: 1000k total, 350k used (35%)`,
+        },
+      ],
+    });
+
+    const cpuResult = summary.results.find((r) => r.checkId === "fg-hw-cpu");
+    expect(cpuResult).toBeDefined();
+    expect(cpuResult?.evidenceRefs).toEqual(["cmd-perf-1", "cmd-perf-2"]);
+    expect(cpuResult?.evaluationStatus).toBe("REVIEW");
+    expect(cpuResult?.remarks).toContain("Captured 2 instantaneous CPU observations");
   });
 
   it("enforces device isolation: commands from a different device are rejected", () => {

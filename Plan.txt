@@ -1,0 +1,627 @@
+# CTC CLI Report Generator — Antigravity Refactoring Plan
+
+Repository: [chaziyu/cli-report-generator](https://github.com/chaziyu/cli-report-generator?utm_source=chatgpt.com) Objective: Simplify the existing application into a single-page workflow without rewriting its working processing engine.
+
+Target workflow: Copy CLI commands → Upload PuTTY log and Word report → Paste or drop GUI screenshots → Generate → Review → Download.
+
+## Target user experience
+
+1\. CLI Commands
+
+Copy individual approved commands into customer's PuTTY
+
+2\. Upload Evidence
+
+PuTTY TXT + existing CTC DOCX + GUI screenshots via paste/drop
+
+3\. Generate
+
+Parse, evaluate, render CLI evidence and prepare document changes automatically
+
+4\. Review
+
+Show all findings; prioritize missing, failed and uncertain checks
+
+5\. Download DOCX
+
+Original CTC report layout preserved
+
+The engineer should not have to create a session manually, configure device records, parse logs separately, generate evidence separately or open an export configuration dialog.
+
+## Architecture to preserve
+
+Your current repository already has the foundations:
+
+| Existing subsystem                | Decision                        |
+| --------------------------------- | ------------------------------- |
+| Next.js + TypeScript              | Keep                            |
+| Prisma + SQLite                   | Keep                            |
+| FortiGate vendor adapter          | Keep                            |
+| PuTTY log parser                  | Reuse                           |
+| PM rule engine                    | Reuse                           |
+| SVG/Sharp evidence renderer       | Reuse                           |
+| DOCX inspector/editor             | Reuse                           |
+| CTC FortiGate v1.1 layout mapping | Keep                            |
+| Session and review data models    | Reuse, extend only where needed |
+| Existing multi-workspace UI       | Simplify                        |
+
+Do not introduce a Python backend or a new frontend framework. This is a workflow and interface refactor with one important addition: GUI screenshot collection and appendix integration.
+
+## Phase 1: Simplify the homepage and session setup
+
+Objective: Make `/` the primary report-generation workspace.
+
+Existing code to modify
+
+- `src/app/page.tsx` — Currently renders a PM session list and Create PM Session button.
+- `src/app/sessions/new/page.tsx` — Contains the customer, vendor and device setup form.
+- `src/components/session/session-workspace.tsx` — Has overview, checklist, logs and evidence views.
+- `src/app/api/sessions/route.ts` — Creates and retrieves sessions.
+
+Required changes
+
+- Replace the session-list-first homepage with a generator-first layout.
+- Move prior reports to a compact Recent Reports section.
+- Default to FortiGate, while retaining the vendor registry.
+- Create a session automatically when files are processed or saved.
+- Extract customer, PM date and device details from the uploaded Word report where possible.
+- Ask for missing information only when extraction is insufficient.
+- Allow reopening existing work.
+
+New logic
+
+- Automatic session initialization.
+- Temporary draft state before a session is persisted.
+- Metadata reconciliation between DOCX and CLI outputs.
+- Clear warnings for ambiguous device identification.
+
+Do not change
+
+- Existing Prisma models unnecessarily.
+- Current session API behavior used by older pages.
+- Vendor adapter contracts.
+- Original uploaded documents.
+
+Validation
+
+- A user can start directly from the homepage.
+- No mandatory hostname or customer form appears before upload.
+- Existing sessions still open.
+- Multi-device reports do not silently map all evidence to the first device.
+
+## Phase 2: Integrate CLI command copying
+
+Objective: Keep command collection accessible on the same page, without making it a separate workflow.
+
+Existing code to modify
+
+- `src/components/checklist/command-collector.tsx` — Contains command copying, filtering and collection-script functionality.
+- `src/vendors/fortigate/commands.ts` — Defines collection commands and script generation.
+- `src/app/api/vendors/[vendor]/commands/route.ts` — Exposes vendor commands.
+
+Required changes
+
+- Display the CLI command section above file uploads.
+- Group commands by System, Hardware, Licensing, Network, HA and Logs.
+- Provide a Copy button for each command.
+- Display short descriptions and applicability notes.
+- Allow expanding advanced command details.
+- Keep any Copy All option secondary, with a warning against blindly pasting an entire sequence into a production firewall.
+
+New logic
+
+- Compact command list component, or adapt the existing collector.
+- Clipboard-success feedback.
+- Optional local visual progress tracking for commands already executed.
+
+Do not change
+
+- Approved command definitions.
+- The CLI parsing engine.
+- PuTTY access or customer authentication behavior.
+
+Validation
+
+- Copy buttons copy only the intended command.
+- FortiGate commands are shown in the correct group.
+- Manual/GUI tasks are not incorrectly represented as executable CLI commands.
+- Future vendors use the same UI through their adapters.
+
+## Phase 3: Add GUI screenshot paste and drag-and-drop
+
+Objective: Allow engineers to add GUI screenshots without saving and uploading each one manually.
+
+Existing code to modify
+
+- `src/components/session/session-workspace.tsx` — Existing file upload handling.
+- `src/app/api/sessions/[id]/files/route.ts` — Existing upload API.
+- `src/lib/storage/types.ts` — Already includes a `screenshots` storage category.
+- `prisma/schema.prisma` — `UploadedFile.type` already supports `GUI_SCREENSHOT` as a documented value.
+- `src/vendors/fortigate/checklist.ts` — Already distinguishes `GUI_MANUAL` checks.
+
+New code proposed
+
+- `src/components/evidence/gui-screenshot-uploader.tsx`
+- `src/components/evidence/screenshot-card.tsx`
+- `src/core/evidence/gui-evidence-mapper.ts`
+- A screenshot-specific API route only if the existing file endpoint cannot support the required metadata safely.
+
+### Required behavior
+
+Support three input methods:
+
+1. `Ctrl+V` to paste a screenshot copied from the customer's screen.
+2. Drag and drop PNG/JPEG screenshots.
+3. Choose multiple image files.
+
+After receiving a screenshot:
+
+- Save it automatically.
+- Display a thumbnail.
+- Suggest a checklist/appendix destination where possible.
+- Allow changing that destination.
+- Allow removing or replacing the screenshot.
+- Preserve original image data.
+
+### FortiGate screenshot mapping
+
+| GUI task             | Default appendix             |
+| -------------------- | ---------------------------- |
+| GUI Accessibility    | Appendix 9                   |
+| Backup Configuration | Appendix 16                  |
+| Other manual checks  | Engineer selects destination |
+
+The app should use the selected vendor's report layout, not hardcode these appendix numbers throughout the UI.
+
+Important: The customer may have completed the GUI screenshot before or after the CLI checks. Screenshot upload must not depend on the PuTTY log already being processed.
+
+### Clipboard handling
+
+- Listen for paste events only when the screenshot upload area is active or focused.
+- Detect image data on the clipboard.
+- Ignore ordinary text pastes.
+- Convert clipboard image data into a supported file.
+- Preview the image immediately.
+- Show a clear error if clipboard access is unavailable.
+- Avoid globally intercepting `Ctrl+V` while the engineer edits remarks.
+
+### Appendix insertion rules
+
+- One appendix may contain multiple screenshots.
+- Existing images must not be deleted automatically.
+- The engineer must approve replacing existing appendix evidence.
+- If a screenshot has no confirmed destination, leave it unmapped and flag it.
+- Manual screenshot evidence should retain its original identity, separate from generated CLI images.
+
+Validation
+
+- Paste PNG screenshots from the clipboard.
+- Drop multiple screenshots.
+- Reassign an image from Appendix 9 to Appendix 16.
+- Reject invalid files.
+- Persist images after page refresh.
+- Ensure images are not attached to the wrong firewall in multi-device sessions.
+
+## Phase 4: Build automatic processing orchestration
+
+Objective: Replace separate Parse, Evaluate and Generate Evidence actions with one primary button.
+
+Existing endpoints to reuse
+
+| Endpoint                                         | Current function                         |
+| ------------------------------------------------ | ---------------------------------------- |
+| `src/app/api/sessions/[id]/parse-log/route.ts`   | Parses uploaded logs                     |
+| `src/app/api/sessions/[id]/evaluate/route.ts`    | Evaluates checklist results              |
+| `src/app/api/sessions/[id]/evidence/route.ts`    | Generates CLI evidence                   |
+| `src/app/api/sessions/[id]/inspect-doc/route.ts` | Inspects Word structure                  |
+| `src/app/api/sessions/[id]/review/route.ts`      | Retrieves findings and records decisions |
+
+New code proposed
+
+- `src/core/workflow/report-pipeline.ts`
+- `src/core/workflow/workflow-status.ts`
+- `src/app/api/sessions/[id]/process/route.ts`
+
+### Processing sequence
+
+After the engineer clicks Generate PM Report:
+
+1. Validate uploaded files.
+2. Create or resume the PM session.
+3. Inspect Word metadata, sections and devices.
+4. Map PuTTY logs to devices.
+5. Parse recognized CLI commands.
+6. Evaluate checklist results.
+7. Generate CLI evidence images.
+8. Associate manually uploaded GUI screenshots.
+9. Compare proposed findings with original Word values.
+10. Prepare the review screen.
+
+This button should prepare the report, not silently finalize unsupported findings or overwrite original evidence.
+
+### Failure handling
+
+Each operation must report its own status.
+
+For example, if parsing succeeds but evidence generation fails, the engineer should be able to retry evidence generation without uploading everything again.
+
+Design the pipeline to be:
+
+- Idempotent where possible.
+- Safe to retry.
+- Able to retain successful intermediate results.
+- Resistant to duplicate evidence and checklist records.
+- Explicit about partially completed processing.
+
+The current evidence endpoint deletes prior evidence records for a command before regeneration. Review that behavior carefully so new GUI screenshots and engineer-approved evidence are never accidentally deleted.
+
+Do not change: Existing parser, evaluator and renderer algorithms unless integration testing reveals a specific defect.
+
+Validation
+
+- One button initiates the required processing stages.
+- Processing errors are visible.
+- Retrying does not create duplicate results.
+- Incomplete logs remain reviewable.
+- The UI never claims the report is complete when mandatory processing failed.
+
+## Phase 5: Redesign the checklist review
+
+Objective: Show the PM results clearly, while making problems easy to find.
+
+Existing code to modify
+
+- `src/components/report/review-workspace.tsx`
+- `src/components/report/review-table.tsx`
+- `src/components/report/evidence-modal.tsx`
+- `src/components/report/justification-dialog.tsx`
+
+The current review workspace already supports individual approval, status overrides, remarks editing and batch approval.
+
+Reuse that logic rather than replacing the underlying review service.
+
+### Proposed default layout
+
+PM Checklist Results
+
+UI concept
+
+# 15
+
+Passed
+
+# 3
+
+Review
+
+# 2
+
+Missing
+
+Needs attentionAll checks
+
+Firmware
+
+Version 7.4.11 · needs reference
+
+Review
+
+GUI Accessibility
+
+Screenshot missing
+
+Missing
+
+Backup
+
+Manual confirmation required
+
+Review
+
+Illustrative checklist values only.
+
+### Required changes
+
+Default to Needs Attention, with an option to show all checklist items.
+
+Each checklist row should display:
+
+- Check name.
+- Extracted value or setting.
+- Result status.
+- Evidence indicator.
+- Proposed remarks.
+- Expandable source command and image preview.
+
+The engineer should be able to update remarks or override results inline when necessary.
+
+### Approval policy
+
+- Preserve the existing individual approval mechanism.
+- Provide bulk approval for eligible, confidently parsed findings.
+- Require explicit review for failed checks, conflicting evidence, unsupported rules and missing mandatory evidence.
+- Record overrides and justifications.
+- Do not automatically convert all unreviewed checks to Pass.
+
+Do not change: Existing review decisions, audit trail or validation rules.
+
+Validation
+
+- All checklist items remain available.
+- Exceptions are shown correctly.
+- Approved findings persist.
+- Reviewer edits are preserved after refresh.
+- Changing device selection does not expose another device's findings.
+
+## Phase 6: Simplify evidence preview and appendix mapping
+
+Objective: Make evidence easy to inspect without requiring a separate evidence-generation page.
+
+Existing code to modify
+
+- `src/components/evidence/evidence-workspace.tsx`
+- `src/components/evidence/evidence-card.tsx`
+- `src/components/report/evidence-modal.tsx`
+- `src/core/evidence/evidence-renderer.ts` — Only if required for preview or rendering defects.
+
+### Required changes
+
+Remove separate evidence generation from the normal workflow.
+
+After processing, show an optional Evidence section containing:
+
+- CLI evidence thumbnails.
+- GUI screenshot thumbnails.
+- Appendix destinations.
+- Missing or unmatched evidence.
+- Original source references.
+
+Clicking a thumbnail should open a larger preview.
+
+Engineers should be able to adjust evidence mappings before report export.
+
+Do not change: The raw source log, generated evidence provenance, or renderer behavior without an identified defect.
+
+Validation
+
+- CLI evidence is automatically available after processing.
+- Pasted screenshots appear with the correct task.
+- Original source references remain traceable.
+- Images remain readable after insertion into Word.
+
+## Phase 7: Simplify Word report generation and download
+
+Objective: Provide a single Download action after the engineer has reviewed the report.
+
+Existing code to modify
+
+- `src/components/report/report-export-modal.tsx`
+- `src/app/api/sessions/[id]/export/route.ts`
+- `src/core/document/docx-editor.ts`
+- `src/core/document/docx-validator.ts`
+- `src/report-layouts/ctc-fortigate-v1_1.ts`
+
+The existing editor already accepts approved changes and evidence images. Extend that flow to handle manually uploaded GUI screenshots.
+
+### Required changes
+
+Prepare the report automatically after analysis, but apply only approved findings and evidence modifications when exporting.
+
+Replace the routine export modal with a visible primary Download button.
+
+The export operation should:
+
+- Use the uploaded Word file.
+- Apply approved checklist updates.
+- Insert approved CLI evidence.
+- Insert approved GUI screenshot evidence.
+- Preserve original content unless replacement is approved.
+- Preserve sign-off sections.
+- Validate the resulting DOCX.
+- Produce a change summary.
+
+### Existing-report preservation
+
+Do not regenerate the entire CTC Word report. Use targeted OOXML changes to maintain its existing layout.
+
+Special care is required for:
+
+- Word tables and merged cells.
+- Existing screenshots.
+- Appendix headings.
+- Checkboxes.
+- Headers and footers.
+- Signatures.
+- Page numbering.
+- Table of contents.
+
+Do not change: The original uploaded document or protected authorization sections.
+
+Validation
+
+- The generated Word report opens without repair warnings.
+- GUI and CLI evidence appears in the intended appendices.
+- Original screenshots remain unless replacement was approved.
+- Report formatting is visually consistent with the source.
+- Unsupported layouts fail safely with an explanation.
+
+## Phase 8: Autosave and simplified session recovery
+
+Objective: Avoid losing progress if the engineer refreshes or closes the application.
+
+Existing code to inspect and modify as required
+
+- `prisma/schema.prisma`
+- `src/app/api/sessions/[id]/route.ts`
+- `src/components/session/session-workspace.tsx`
+- `src/lib/storage/`
+
+### Required changes
+
+Persist:
+
+- Uploaded files.
+- Screenshot mappings.
+- Parsed results.
+- Engineer remarks.
+- Review decisions.
+- Processing state.
+- Generated report references.
+
+Use the existing SQLite session model rather than building a second autosave system.
+
+On reopening the application, show an existing incomplete report with an option to continue.
+
+Do not change: The existing storage architecture unnecessarily.
+
+Validation
+
+- Refresh preserves work.
+- Reopening a session restores uploaded evidence.
+- Approved changes remain available.
+- Reprocessing does not discard engineer edits without warning.
+
+## Phase 9: UI cleanup and responsive design
+
+Objective: Make the application readable during a real PM session, including when Teams and PuTTY occupy part of the engineer's screen.
+
+Existing code to modify
+
+- `src/app/globals.css`
+- `src/app/layout.tsx`
+- `src/components/layout/navbar.tsx`
+- Main workspace components modified in earlier phases.
+
+### Design requirements
+
+| Element      | Design recommendation                                 |
+| ------------ | ----------------------------------------------------- |
+| Layout       | One main page, centered content                       |
+| Navigation   | Minimal navigation                                    |
+| Colors       | Neutral surfaces, restrained status colors            |
+| Typography   | Readable text and clear hierarchy                     |
+| CLI commands | Monospaced command text                               |
+| File uploads | Large, clearly labeled drop zones                     |
+| Screenshots  | Thumbnails with appendix labels                       |
+| Checklist    | Compact rows and expandable details                   |
+| Actions      | One primary action at a time                          |
+| Progress     | Clear processing status                               |
+| Errors       | Actionable explanations, not raw technical exceptions |
+
+Use progressive disclosure: show only the details the engineer needs for the current task.
+
+Avoid large dashboards, repeated statistics, excessive borders, and labels such as `Phase 6` or `Phase 8` in user-facing screens.
+
+Validation
+
+- Usable on common laptop resolutions.
+- No unnecessary horizontal scrolling.
+- Copy buttons work without navigating away.
+- Screenshot previews remain accessible.
+- Keyboard navigation works.
+- Existing workflows remain recoverable.
+
+## Phase 10: Regression testing and multi-vendor compatibility
+
+Objective: Ensure the simplified interface does not break the existing backend or future vendor support.
+
+Existing code to inspect
+
+- `src/vendors/types.ts`
+- `src/vendors/registry.ts`
+- `src/report-layouts/registry.ts`
+- Existing tests under `tests/`.
+
+### Required tests
+
+| Test                 | Expected result                                          |
+| -------------------- | -------------------------------------------------------- |
+| Upload TXT and DOCX  | Session initialized and files retained                   |
+| Paste screenshot     | Image saved and previewed                                |
+| Multiple screenshots | Correct image-to-task mapping                            |
+| Run processing       | Commands parsed, rules evaluated, CLI evidence generated |
+| Incomplete log       | Missing checks identified                                |
+| Conflicting findings | Engineer review required                                 |
+| Export Word          | Approved changes applied                                 |
+| No changes approved  | Original content preserved                               |
+| Page refresh         | Session state restored                                   |
+| Unsupported vendor   | Clear message; no incorrect processing                   |
+| Multiple firewalls   | Evidence linked to correct device                        |
+| Existing APIs        | No unintended behavior changes                           |
+
+Run applicable unit tests, integration tests, linting, type checking and production build. Perform DOCX visual checks with the actual uploaded FortiGate sample.
+
+The repository README reports a test suite, but these tests have not been executed during this review. Their current passing status must be verified during implementation.
+
+## Implementation dependency order
+
+1
+
+Homepage and automatic session creation
+
+2
+
+CLI command section
+
+3
+
+GUI screenshot upload and mapping
+
+4
+
+One-click processing pipeline
+
+5
+
+Compact findings review
+
+6
+
+Integrated evidence previews
+
+7
+
+One-click Word export
+
+8–10
+
+Autosave, UI cleanup and regression validation
+
+### Final acceptance criteria
+
+The refactor is complete when an engineer can:
+
+1. Open the homepage directly.
+2. Copy FortiGate commands without leaving the page.
+3. Upload a PuTTY TXT log and existing Word report.
+4. Paste GUI screenshots using `Ctrl+V`, or drag and drop them.
+5. Click Generate PM Report once.
+6. Review the results, focusing on exceptions.
+7. Download the updated CTC Word report without navigating through multiple workspaces.
+
+Future vendors must use the same frontend workflow. Only their command definitions, parsers, validation rules and report mappings should differ.
+
+
+## Implementation process
+
+Before implementation, inspect and trace the actual existing code.
+
+Follow the ten phases in the agreed implementation plan, respecting dependencies.
+
+For each phase:
+
+- Identify exact existing code to modify.
+- Identify new files and functions to add.
+- Preserve existing architecture and reusable logic.
+- Make the smallest required changes.
+- Add relevant tests.
+- Run tests, linting, type checks and builds.
+- Report changed files, validation results and unresolved risks.
+
+Do not perform unrelated refactoring or cleanup.
+
+Do not proceed to the next phase until the current phase is validated.
+
+Start by preparing an exact code-level plan for Phase 1. Do not modify code until the plan is reviewed and approved.
+
+Recommendation: Treat this as a simplification of the existing application, not a new project. The current backend already provides much of the required functionality. The priority is to consolidate those capabilities into one predictable, engineer-friendly workflow while adding reliable GUI screenshot handling.

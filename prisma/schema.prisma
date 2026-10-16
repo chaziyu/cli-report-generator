@@ -17,6 +17,8 @@ model PMSession {
   pmDate           DateTime          @default(now())
   status           String            @default("DRAFT") // DRAFT, IN_PROGRESS, REVIEW, COMPLETED
   notes            String?
+  processingRunId          String?
+  processingLeaseExpiresAt DateTime?
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -63,6 +65,8 @@ model UploadedFile {
   mimeType         String
   createdAt        DateTime    @default(now())
 
+  evidences        Evidence[]
+
   @@index([sessionId])
   @@index([hashSha256])
 }
@@ -71,6 +75,8 @@ model CommandExecution {
   id            String     @id @default(cuid())
   deviceId      String
   device        Device     @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  sourceFileId  String?    // UploadedFile id for stable origin tracking
+  segmentIndex  Int?       // Position/order in original log file
   command       String
   commandGroup  String?    // "System", "Performance", "Interfaces", "Licensing", etc.
   rawOutputRef  String?    // path or reference to raw snippet
@@ -84,24 +90,26 @@ model CommandExecution {
 
   @@index([deviceId])
   @@index([command])
+  @@index([sourceFileId])
 }
 
 model ChecklistResult {
-  id              String           @id @default(cuid())
-  deviceId        String
-  device          Device           @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-  checkId         String           // stable check ID (e.g. "fg-sys-cpu", "fg-sys-mem")
-  checkName       String
-  sectionName     String?          // e.g. "Hardware Status", "Product Licensing"
-  targetAppendix  String?          // e.g. "Appendix 1", "Appendix 2"
-  collectionState String           @default("MISSING") // COMPLETE, INCOMPLETE, MISSING, UNSUPPORTED
-  status          String           @default("PENDING") // PASS, FAIL, WARNING, NA, REVIEW, PENDING
-  currentValue    String?          // Extracted value e.g. "18%"
-  expectedValue   String?          // Expected threshold e.g. "< 80%"
-  remarks         String?          // Engineer or system remarks
-  reviewRequired  Boolean          @default(false)
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  id                  String           @id @default(cuid())
+  deviceId            String
+  device              Device           @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  checkId             String           // stable check ID (e.g. "fg-sys-cpu", "fg-sys-mem")
+  checkName           String
+  sectionName         String?          // e.g. "Hardware Status", "Product Licensing"
+  targetAppendix      String?          // e.g. "Appendix 1", "Appendix 2"
+  collectionState     String           @default("MISSING") // COMPLETE, INCOMPLETE, MISSING, UNSUPPORTED
+  status              String           @default("PENDING") // PASS, FAIL, WARNING, NA, REVIEW, PENDING
+  currentValue        String?          // Extracted value e.g. "18%"
+  expectedValue       String?          // Expected threshold e.g. "< 80%"
+  remarks             String?          // Engineer or system remarks
+  evidenceFingerprint String?          // SHA-256 fingerprint of evidence evaluated
+  reviewRequired      Boolean          @default(false)
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
 
   reviewDecisions ReviewDecision[]
 
@@ -114,32 +122,39 @@ model Evidence {
   id                 String            @id @default(cuid())
   commandExecutionId String?
   commandExecution   CommandExecution? @relation(fields: [commandExecutionId], references: [id], onDelete: SetNull)
+  uploadedFileId     String?
+  uploadedFile       UploadedFile?     @relation(fields: [uploadedFileId], references: [id], onDelete: SetNull)
   deviceId           String?
+  checkId            String?           // stable PM checklist task ID (e.g. "fg-mgmt-gui", "fg-sys-backup")
   title              String
   appendixMapping    String?           // e.g. "Appendix 1: System Status"
   imageReference     String            // relative storage path to PNG evidence
   caption            String?
   isRedacted         Boolean           @default(false)
+  isExcluded         Boolean           @default(false) // true if excluded from report by engineer
   pageNumber         Int               @default(1)
   totalPages         Int               @default(1)
   sourceLabel        String            @default("Rendered from PuTTY session log")
   createdAt          DateTime          @default(now())
 
   @@index([commandExecutionId])
+  @@index([uploadedFileId])
+  @@index([checkId])
 }
 
 model ReviewDecision {
-  id                String          @id @default(cuid())
-  checklistResultId String
-  checklistResult   ChecklistResult @relation(fields: [checklistResultId], references: [id], onDelete: Cascade)
-  proposedStatus    String?
-  proposedRemarks   String?
-  decision          String          @default("PENDING") // PENDING, APPROVED, MODIFIED, REJECTED
-  finalStatus       String?
-  finalRemarks      String?
-  reviewer          String
-  reviewNotes       String?
-  decidedAt         DateTime        @default(now())
+  id                  String          @id @default(cuid())
+  checklistResultId   String
+  checklistResult     ChecklistResult @relation(fields: [checklistResultId], references: [id], onDelete: Cascade)
+  proposedStatus      String?
+  proposedRemarks     String?
+  evidenceFingerprint String?         // Fingerprint of evidence when decision was made
+  decision            String          @default("PENDING") // PENDING, APPROVED, MODIFIED, REJECTED, SUPERSEDED
+  finalStatus         String?
+  finalRemarks        String?
+  reviewer            String
+  reviewNotes         String?
+  decidedAt           DateTime        @default(now())
 
   @@index([checklistResultId])
 }

@@ -99,7 +99,7 @@ Group: 0
 
     const summary = postData.data.deviceSummaries[0];
     expect(summary.totalChecks).toBe(21);
-    expect(summary.passedCount).toBeGreaterThanOrEqual(2);
+    expect(summary.reviewCount).toBeGreaterThanOrEqual(1);
 
     // 4. Verify SQLite persistence of ChecklistResult
     const persistedResults = await prisma.checklistResult.findMany({
@@ -109,7 +109,8 @@ Group: 0
 
     const cpuItem = persistedResults.find((r) => r.checkId === "fg-hw-cpu");
     expect(cpuItem).toBeDefined();
-    expect(cpuItem?.status).toBe("PASS");
+    expect(cpuItem?.status).toBe("REVIEW");
+    expect(cpuItem?.reviewRequired).toBe(true);
     expect(cpuItem?.currentValue).toContain("1%");
 
     const diskItem = persistedResults.find((r) => r.checkId === "fg-hw-disk");
@@ -135,7 +136,8 @@ Group: 0
     expect(getData.success).toBe(true);
     expect(getData.data.devices.length).toBe(1);
     expect(getData.data.devices[0].counts.total).toBe(21);
-    expect(getData.data.devices[0].counts.pass).toBeGreaterThanOrEqual(2);
+    expect(getData.data.devices[0].counts.pass).toBeGreaterThanOrEqual(1);
+    expect(getData.data.devices[0].counts.review).toBeGreaterThanOrEqual(1);
     expect(getData.data.devices[0].counts.na).toBeGreaterThanOrEqual(2);
   });
 });

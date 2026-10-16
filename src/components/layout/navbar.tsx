@@ -8,8 +8,7 @@ export function Navbar() {
   const pathname = usePathname();
 
   const navItems = [
-    { href: "/", label: "Sessions", icon: ListFilter },
-    { href: "/sessions/new", label: "New PM Session", icon: Plus },
+    { href: "/", label: "Report Generator", icon: ShieldCheck },
   ];
 
   return (

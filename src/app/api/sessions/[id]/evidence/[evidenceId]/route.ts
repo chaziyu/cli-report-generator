@@ -25,11 +25,23 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
 
     const imageBuffer = await storage.getFile(evidence.imageReference);
 
+    // Determine verified safe content-type via magic bytes
+    let contentType = "image/png";
+    if (
+      imageBuffer.length >= 3 &&
+      imageBuffer[0] === 0xff &&
+      imageBuffer[1] === 0xd8 &&
+      imageBuffer[2] === 0xff
+    ) {
+      contentType = "image/jpeg";
+    }
+
     return new NextResponse(new Uint8Array(imageBuffer), {
       status: 200,
       headers: {
-        "Content-Type": "image/png",
+        "Content-Type": contentType,
         "Content-Length": imageBuffer.byteLength.toString(),
+        "X-Content-Type-Options": "nosniff",
         "Cache-Control": "public, max-age=31536000, immutable",
       },
     });

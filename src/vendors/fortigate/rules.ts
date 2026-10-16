@@ -27,7 +27,13 @@ export interface EvaluatedFinding {
 
 export type FortiGateRuleHandler = (
   metrics: ExtractedMetricsValue | undefined,
-  context?: { hasExecution: boolean; rawOutput?: string }
+  context?: {
+    hasExecution: boolean;
+    rawOutput?: string;
+    executions?: any[];
+    allOutputs?: string[];
+    allMetrics?: ExtractedMetricsValue[];
+  }
 ) => EvaluatedFinding;
 
 /**
@@ -36,7 +42,8 @@ export type FortiGateRuleHandler = (
  * Requirements:
  * - Deterministic, boundary-tested rules (no generative AI guessing).
  * - Distinguish N/A (e.g. diskless firewall, standalone HA) from missing data.
- * - Current CPU reading alone is noted as snapshot, not proof of 1-hour sustained.
+ * - Distinguish instantaneous CPU/memory readings from historical measurements.
+ * - Insufficient historical evidence requires review rather than automatically passing.
  * - License expiry warning boundary: <= 30 days.
  * - Missing evidence must never produce PASS.
  */
@@ -112,28 +119,66 @@ export const FORTIGATE_RULES: Record<string, FortiGateRuleHandler> = {
       };
     }
 
-    const perf = metrics as PerformanceMetrics;
-    const cpuPct = perf.totalCpuUtilizationPct;
+    const perfList =
+      ctx?.allMetrics && ctx.allMetrics.length > 0
+        ? (ctx.allMetrics as PerformanceMetrics[])
+        : [metrics as PerformanceMetrics];
 
-    if (cpuPct < 80) {
+    // Check if any observation exceeds threshold (fail boundary)
+    const failingPerf = perfList.find((p) => p.totalCpuUtilizationPct >= 80);
+    if (failingPerf) {
+      const isHistorical = Boolean(failingPerf.isHistoricalAverage);
+      return {
+        ruleId: "rule-fg-cpu-fail",
+        collectionState: "COMPLETE",
+        evaluationStatus: "FAIL",
+        currentValue: `${isHistorical ? "1-hr average" : "Instantaneous"}: ${failingPerf.totalCpuUtilizationPct}%`,
+        expectedValue: "Average CPU < 80% for past 1 hour",
+        remarks: `CPU usage: ${failingPerf.totalCpuUtilizationPct}% exceeds 80% threshold (${isHistorical ? "1-hour historical average" : "instantaneous snapshot"}). Immediate investigation required. Refer Appendix 1`,
+        reviewRequired: true,
+      };
+    }
+
+    // Check if authentic historical average evidence is present
+    const hasHistorical = perfList.some((p) => p.isHistoricalAverage);
+    if (hasHistorical) {
+      const histPerf = perfList.find((p) => p.isHistoricalAverage)!;
       return {
         ruleId: "rule-fg-cpu-pass",
         collectionState: "COMPLETE",
         evaluationStatus: "PASS",
-        currentValue: `CPU usage: ${cpuPct}%`,
+        currentValue: `1-hr average: ${histPerf.totalCpuUtilizationPct}%`,
         expectedValue: "Average CPU < 80% for past 1 hour",
-        remarks: `CPU usage: ${cpuPct}%. Current reading is within approved threshold. Refer Appendix 1`,
+        remarks: `1-hour average CPU is ${histPerf.totalCpuUtilizationPct}%. Verified within approved threshold. Refer Appendix 1`,
         reviewRequired: false,
       };
     }
 
+    // Instantaneous snapshot readings:
+    // Do not invent timestamps when PuTTY did not record them.
+    // Instantaneous measurements do not prove 1-hour historical compliance -> mark as requiring review rather than automatically passing.
+    if (perfList.length === 1) {
+      const p = perfList[0];
+      return {
+        ruleId: "rule-fg-cpu-review",
+        collectionState: "COMPLETE",
+        evaluationStatus: "REVIEW",
+        currentValue: `Instantaneous: ${p.totalCpuUtilizationPct}%`,
+        expectedValue: "Average CPU < 80% for past 1 hour",
+        remarks: `Instantaneous CPU reading is ${p.totalCpuUtilizationPct}% (< 80%). CLI snapshot does not prove 1-hour sustained compliance; engineer review required. Refer Appendix 1`,
+        reviewRequired: true,
+      };
+    }
+
+    // Multiple instantaneous observations: preserve all observations without inventing timestamps
+    const readings = perfList.map((p) => `${p.totalCpuUtilizationPct}%`).join(", ");
     return {
-      ruleId: "rule-fg-cpu-fail",
+      ruleId: "rule-fg-cpu-review-multi",
       collectionState: "COMPLETE",
-      evaluationStatus: "FAIL",
-      currentValue: `CPU usage: ${cpuPct}%`,
+      evaluationStatus: "REVIEW",
+      currentValue: `Instantaneous readings: ${readings}`,
       expectedValue: "Average CPU < 80% for past 1 hour",
-      remarks: `CPU usage: ${cpuPct}% exceeds 80% threshold. Immediate investigation required. Refer Appendix 1`,
+      remarks: `Captured ${perfList.length} instantaneous CPU observations (${readings}). Point-in-time readings do not establish 1-hour sustained average; engineer review required. Refer Appendix 1`,
       reviewRequired: true,
     };
   },
@@ -153,28 +198,66 @@ export const FORTIGATE_RULES: Record<string, FortiGateRuleHandler> = {
       };
     }
 
-    const perf = metrics as PerformanceMetrics;
-    const memPct = perf.memoryUtilizationPct;
+    const perfList =
+      ctx?.allMetrics && ctx.allMetrics.length > 0
+        ? (ctx.allMetrics as PerformanceMetrics[])
+        : [metrics as PerformanceMetrics];
 
-    if (memPct < 80) {
+    // Check if any observation exceeds threshold (fail boundary)
+    const failingPerf = perfList.find((p) => p.memoryUtilizationPct >= 80);
+    if (failingPerf) {
+      const isHistorical = Boolean(failingPerf.isHistoricalAverage);
+      return {
+        ruleId: "rule-fg-mem-fail",
+        collectionState: "COMPLETE",
+        evaluationStatus: "FAIL",
+        currentValue: `${isHistorical ? "1-hr average" : "Instantaneous"}: ${failingPerf.memoryUtilizationPct}%`,
+        expectedValue: "Memory usage < 80% for past 1 hour",
+        remarks: `Memory usage: ${failingPerf.memoryUtilizationPct}% exceeds 80% threshold (${isHistorical ? "1-hour historical average" : "risk of entering conserve mode"}). Immediate investigation required. Refer Appendix 2`,
+        reviewRequired: true,
+      };
+    }
+
+    // Check if authentic historical average evidence is present
+    const hasHistorical = perfList.some((p) => p.isHistoricalAverage);
+    if (hasHistorical) {
+      const histPerf = perfList.find((p) => p.isHistoricalAverage)!;
       return {
         ruleId: "rule-fg-mem-pass",
         collectionState: "COMPLETE",
         evaluationStatus: "PASS",
-        currentValue: `Memory usage: ${memPct}%`,
+        currentValue: `1-hr average: ${histPerf.memoryUtilizationPct}%`,
         expectedValue: "Memory usage < 80% for past 1 hour",
-        remarks: `Memory usage: ${memPct}%. Utilization is below 80% threshold. Refer Appendix 2`,
+        remarks: `1-hour average memory usage is ${histPerf.memoryUtilizationPct}%. Verified below 80% threshold. Refer Appendix 2`,
         reviewRequired: false,
       };
     }
 
+    // Instantaneous snapshot readings:
+    // Do not invent timestamps when PuTTY did not record them.
+    // Instantaneous measurements do not prove 1-hour historical compliance -> mark as requiring review rather than automatically passing.
+    if (perfList.length === 1) {
+      const p = perfList[0];
+      return {
+        ruleId: "rule-fg-mem-review",
+        collectionState: "COMPLETE",
+        evaluationStatus: "REVIEW",
+        currentValue: `Instantaneous: ${p.memoryUtilizationPct}%`,
+        expectedValue: "Memory usage < 80% for past 1 hour",
+        remarks: `Instantaneous memory reading is ${p.memoryUtilizationPct}% (< 80%). CLI snapshot does not prove 1-hour sustained compliance; engineer review required. Refer Appendix 2`,
+        reviewRequired: true,
+      };
+    }
+
+    // Multiple instantaneous observations: preserve all observations without inventing timestamps
+    const readings = perfList.map((p) => `${p.memoryUtilizationPct}%`).join(", ");
     return {
-      ruleId: "rule-fg-mem-fail",
+      ruleId: "rule-fg-mem-review-multi",
       collectionState: "COMPLETE",
-      evaluationStatus: "FAIL",
-      currentValue: `Memory usage: ${memPct}%`,
+      evaluationStatus: "REVIEW",
+      currentValue: `Instantaneous readings: ${readings}`,
       expectedValue: "Memory usage < 80% for past 1 hour",
-      remarks: `Memory usage: ${memPct}% exceeds 80% threshold (risk of entering conserve mode). Refer Appendix 2`,
+      remarks: `Captured ${perfList.length} instantaneous memory observations (${readings}). Point-in-time readings do not establish 1-hour sustained compliance; engineer review required. Refer Appendix 2`,
       reviewRequired: true,
     };
   },

@@ -27,6 +27,8 @@ export interface PerformanceMetrics {
   activeSessionsCount?: number;
   uptimeSeconds?: number;
   uptimeString?: string;
+  isHistoricalAverage?: boolean;
+  measurementPeriod?: string;
 }
 
 export interface DiskPartitionMetric {

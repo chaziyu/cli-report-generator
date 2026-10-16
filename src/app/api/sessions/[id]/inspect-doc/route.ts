@@ -79,6 +79,30 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
         });
         updatedDeviceCount++;
       }
+    } else if (session.devices.length === 0 && inspectionResult.metadata.hostname) {
+      await prisma.device.create({
+        data: {
+          sessionId,
+          hostname: inspectionResult.metadata.hostname,
+          model: inspectionResult.metadata.model || null,
+          serialNumber: inspectionResult.metadata.serialNumber || null,
+          role: "Primary",
+        },
+      });
+      updatedDeviceCount++;
+    }
+
+    // Enrich customer name if session was created with default draft name
+    if (
+      (session.customer === "Draft PM Session" || session.customer === "Untitled PM Session") &&
+      inspectionResult.metadata.customerName
+    ) {
+      await prisma.pMSession.update({
+        where: { id: sessionId },
+        data: {
+          customer: inspectionResult.metadata.customerName,
+        },
+      });
     }
 
     return NextResponse.json({

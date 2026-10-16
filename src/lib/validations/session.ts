@@ -14,7 +14,8 @@ export const createSessionSchema = z.object({
     .string()
     .trim()
     .min(1, "Customer name is required")
-    .max(120, "Customer name is too long"),
+    .max(120, "Customer name is too long")
+    .default("Draft PM Session"),
   vendor: z.string().trim().min(1, "Vendor selection is required").default("fortigate"),
   engineerName: z.string().trim().max(100).optional().nullable(),
   pmDate: z.coerce.date().optional(),

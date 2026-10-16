@@ -58,6 +58,14 @@ describe("PM Session & Device Management Integration", () => {
       const result = createSessionSchema.safeParse(validInput);
       expect(result.success).toBe(true);
     });
+
+    it("defaults customer to Draft PM Session when omitted", () => {
+      const result = createSessionSchema.safeParse({ vendor: "fortigate" });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.customer).toBe("Draft PM Session");
+      }
+    });
   });
 
   describe("Database Persistence & Session Operations", () => {

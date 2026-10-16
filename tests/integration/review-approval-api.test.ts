@@ -161,7 +161,7 @@ describe("Engineer Review & Approval API Integration", () => {
     // Verify comparison fields on a known item
     const cpuItem = reviewData.items.find((i: { checkId: string }) => i.checkId === "fg-hw-cpu");
     expect(cpuItem).toBeDefined();
-    expect(cpuItem.proposedEvaluation.status).toBe("PASS");
+    expect(cpuItem.proposedEvaluation.status).toBe("REVIEW");
     expect(cpuItem.decision.decision).toBe("PENDING");
 
     // 5. POST single decision: Approve CPU check

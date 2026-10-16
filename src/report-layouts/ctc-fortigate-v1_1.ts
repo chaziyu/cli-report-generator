@@ -423,6 +423,12 @@ export class CtcFortiGateLayoutV1_1 implements ReportLayoutDefinition {
     if (titleLower.includes("manager") || titleLower.includes("faz")) {
       return { checkIds: ["fg-sys-faz"], commandId: "cmd-fg-faz-test" };
     }
+    if (titleLower.includes("gui") || titleLower.includes("web") || appNum === 9) {
+      return { checkIds: ["fg-mgmt-gui"] };
+    }
+    if (titleLower.includes("backup") || appNum === 16) {
+      return { checkIds: ["fg-sys-backup"] };
+    }
 
     return { checkIds: [] };
   }
