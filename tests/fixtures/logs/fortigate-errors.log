@@ -1,0 +1,15 @@
+=~=~=~=~=~=~=~=~=~=~=~= PuTTY log 2026.08.15 13:00:00 =~=~=~=~=~=~=~=~=~=~=
+FGT-LAB # get systm status
+command parse error before 'systm'
+Command fail. Return code 1
+
+FGT-LAB # get system status
+Version: FortiGate-60F v7.2.7
+Serial-Number: FGT60FTK20001234
+Hostname: FGT-LAB
+
+FGT-LAB # diagnose test unknown_action
+Unknown action: unknown_action
+command parse error
+
+FGT-LAB # exit

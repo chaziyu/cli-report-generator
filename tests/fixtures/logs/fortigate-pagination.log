@@ -1,0 +1,11 @@
+=~=~=~=~=~=~=~=~=~=~=~= PuTTY log 2026.08.15 11:00:00 =~=~=~=~=~=~=~=~=~=~=
+FGT80F-BRANCH # get router info routing-table all
+Codes: K - kernel, C - connected, S - static, R - RIP, B - BGP
+       O - OSPF, IA - OSPF inter area
+--More--
+       N1 - OSPF NSSA external type 1, N2 - OSPF NSSA external type 2
+       E1 - OSPF external type 1, E2 - OSPF external type 2
+--More--
+S*      0.0.0.0/0 [10/0] via 172.16.1.1, wan1
+C       192.168.10.0/24 is directly connected, lan1
+FGT80F-BRANCH # exit

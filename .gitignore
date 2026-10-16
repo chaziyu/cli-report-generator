@@ -39,3 +39,21 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/src/generated/prisma
+
+# customer documents & authentic PM reports
+/doc/
+/docs/
+doc/
+docs/
+
+# local storage & sqlite database files
+/data/
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

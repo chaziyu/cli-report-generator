@@ -1,0 +1,184 @@
+=~=~=~=~=~=~=~=~=~=~=~= PuTTY log 2026.08.15 09:30:00 =~=~=~=~=~=~=~=~=~=~=
+FortiGate-200F (09:30-08.15.2026)
+Ver:05000010
+Serial-Number:FG200FTK21004812
+RAM: 16384 MB
+Disk: 30533 MB
+Total RAM: 16384 MB
+
+FGT200F-HQ-PRI # get system status
+Version: FortiGate-200F v7.4.11,build2878,250815 (GA.M)
+Firmware Signature: certified
+Virus-DB: 92.04912(2026-08-14 18:32)
+Extended DB: 92.04912(2026-08-14 18:32)
+IPS-DB: 28.00312(2026-08-14 18:10)
+IPS-ETDB: 0.00000(2001-01-01 00:00)
+APP-DB: 28.00312(2026-08-14 18:10)
+INDUSTRIAL-DB: 28.00312(2026-08-14 18:10)
+Serial-Number: FG200FTK21004812
+IPS Malicious URL Database: 5.00412(2026-08-14 18:00)
+Botnet Domain Database: 4.00892(2026-08-14 18:00)
+Evaluation License: No
+BIOS version: 05000010
+System Part-Number: P24563-03
+Hostname: FGT200F-HQ-PRI
+Operation Mode: NAT
+Current virtual domain: root
+Max number of virtual domains: 10
+Virtual domains status: 1 in NAT mode, 0 in TP mode
+Virtual domain configuration: disable
+FIPS-CC mode: disable
+Current HA mode: a-p, master
+Branch point: 2878
+Release Version Information: GA
+FortiOS x86-64: Yes
+
+FGT200F-HQ-PRI # get system performance status
+CPU states: 0% user 1% system 0% nice 99% idle 0% iowait 0% irq 0% softirq
+CPU0 states: 0% user 1% system 0% nice 99% idle 0% iowait 0% irq 0% softirq
+CPU1 states: 0% user 0% system 0% nice 100% idle 0% iowait 0% irq 0% softirq
+CPU2 states: 0% user 1% system 0% nice 99% idle 0% iowait 0% irq 0% softirq
+CPU3 states: 0% user 1% system 0% nice 99% idle 0% iowait 0% irq 0% softirq
+Memory: 16384000k total, 5406720k used (33%), 10977280k free (67%)
+Average network usage: 452 kbps in, 892 kbps out
+Average sessions: 1845 concurrent sessions, 42 sessions/sec
+Average session setup rate: 38 sessions/sec
+Virus sessions: 0 sessions
+IPS sessions: 14 sessions
+Uptime: 177 days,  14 hours,  24 minutes
+
+FGT200F-HQ-PRI # fnsysctl df
+Filesystem           1k-blocks      Used Available Use% Mounted on
+none                    819200       124    819076   0% /tmp
+none                   8192000    421040   7770960   5% /dev/shm
+/dev/nodev             2097152    184320   1912832   9% /var/log
+
+FGT200F-HQ-PRI # get system interface physical
+==[port1]
+        mode: physical
+        speed: 1000Mbps (Duplex: full)
+        link: up
+        tx_packets: 14920412
+        rx_packets: 18402911
+        tx_errors: 0
+        rx_errors: 0
+==[port2]
+        mode: physical
+        speed: 1000Mbps (Duplex: full)
+        link: up
+        tx_packets: 9812401
+        rx_packets: 11204918
+        tx_errors: 0
+        rx_errors: 0
+==[port3]
+        mode: physical
+        speed: auto
+        link: down
+        tx_packets: 0
+        rx_packets: 0
+        tx_errors: 0
+        rx_errors: 0
+==[mgmt]
+        mode: physical
+        speed: 1000Mbps (Duplex: full)
+        link: up
+        tx_packets: 412091
+        rx_packets: 398102
+        tx_errors: 0
+        rx_errors: 0
+
+FGT200F-HQ-PRI # diagnose test update info contract
+Contract info:
+FortiCare Support:
+  Contract: Valid
+  Expires: 2028-04-12
+  Account: ctc.client@customer.com
+Antivirus:
+  Contract: Valid
+  Expires: 2028-04-12
+IPS:
+  Contract: Valid
+  Expires: 2028-04-12
+Web Filtering:
+  Contract: Valid
+  Expires: 2028-04-12
+Anti-Spam:
+  Contract: Valid
+  Expires: 2028-04-12
+Industrial Security:
+  Contract: Valid
+  Expires: 2028-04-12
+
+FGT200F-HQ-PRI # get vpn ipsec tunnel summary
+'vpn_hq_dr' 10.200.1.1:0  selectors(total,up): 1/1  rx(pkt,err): 481029/0  tx(pkt,err): 512019/0
+'vpn_branch_north' 10.200.2.1:0  selectors(total,up): 1/1  rx(pkt,err): 210491/0  tx(pkt,err): 230192/0
+'vpn_branch_south' 10.200.3.1:0  selectors(total,up): 1/1  rx(pkt,err): 189201/0  tx(pkt,err): 198021/0
+'vpn_azure_cloud' 10.200.4.1:0  selectors(total,up): 1/1  rx(pkt,err): 892041/0  tx(pkt,err): 912048/0
+
+FGT200F-HQ-PRI # get router info routing-table all
+Codes: K - kernel, C - connected, S - static, R - RIP, B - BGP
+       O - OSPF, IA - OSPF inter area
+       N1 - OSPF NSSA external type 1, N2 - OSPF NSSA external type 2
+       E1 - OSPF external type 1, E2 - OSPF external type 2
+       i - IS-IS, L1 - IS-IS level-1, L2 - IS-IS level-2, ia - IS-IS inter area
+       * - candidate default
+
+S*      0.0.0.0/0 [10/0] via 192.168.1.1, port1
+C       10.10.0.0/24 is directly connected, port2
+C       192.168.1.0/24 is directly connected, port1
+S       10.20.0.0/16 [10/0] via 10.10.0.254, port2
+S       172.16.0.0/12 [10/0] via 10.200.1.1, vpn_hq_dr
+
+FGT200F-HQ-PRI # get system ha status
+HA Health Status: OK
+Model: FortiGate-200F
+Mode: a-p
+Group: 10
+Group name: FGT-CLUSTER-HQ
+Cluster Uptime: 177 days, 14:20:12
+Cluster state change time: 2026-02-18 19:09:48
+Master: FGT200F-HQ-PRI, FG200FTK21004812, cluster index: 0
+Slave:  FGT200F-HQ-SEC, FG200FTK21004899, cluster index: 1
+hb dev: ha1:up ha2:up
+Configuration status: in-sync
+
+FGT200F-HQ-PRI # diagnose autoupdate versions
+AV Engine: 00006.00142
+Virus Definitions: 92.04912 (Updated 2026-08-14 18:32)
+Extended Definitions: 92.04912 (Updated 2026-08-14 18:32)
+IPS Engine: 00007.00291
+IPS Attack Definitions: 28.00312 (Updated 2026-08-14 18:10)
+Application Definitions: 28.00312 (Updated 2026-08-14 18:10)
+Industrial Definitions: 28.00312 (Updated 2026-08-14 18:10)
+
+FGT200F-HQ-PRI # diagnose sys ntp status
+synchronized: yes, stratum 2, offset 0.001241, jitter 0.000412
+server: 208.91.112.63, stratum 1, reach 377, delay 0.014201
+server: 208.91.112.62, stratum 1, reach 377, delay 0.015102
+time zone: GMT+8 (Asia/Kuala_Lumpur)
+
+FGT200F-HQ-PRI # execute ping 8.8.8.8
+PING 8.8.8.8 (8.8.8.8): 56 data bytes
+64 bytes from 8.8.8.8: icmp_seq=0 ttl=118 time=4.2 ms
+64 bytes from 8.8.8.8: icmp_seq=1 ttl=118 time=4.1 ms
+64 bytes from 8.8.8.8: icmp_seq=2 ttl=118 time=4.3 ms
+64 bytes from 8.8.8.8: icmp_seq=3 ttl=118 time=4.2 ms
+64 bytes from 8.8.8.8: icmp_seq=4 ttl=118 time=4.1 ms
+
+--- 8.8.8.8 ping statistics ---
+5 packets transmitted, 5 packets received, 0% packet loss
+round-trip min/avg/max = 4.1/4.18/4.3 ms
+
+FGT200F-HQ-PRI # execute log fortianalyzer test-connectivity
+FortiAnalyzer IP: 10.10.10.50
+Connection state: Connected
+SSL handshake: OK
+Registration status: Registered
+Log status: Logging enabled
+
+FGT200F-HQ-PRI # execute log display
+1: 2026-08-15 09:12:04 log_id=0100022001 type=event subtype=system pri=information msg="Admin user admin logged in from 10.10.0.105 via ssh"
+2: 2026-08-15 08:30:11 log_id=0100038000 type=event subtype=system pri=information msg="Autoupdate: AV definitions updated to 92.04912"
+3: 2026-08-15 06:00:00 log_id=0100020000 type=event subtype=system pri=information msg="Scheduled daily configuration check passed"
+
+FGT200F-HQ-PRI # exit

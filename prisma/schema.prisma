@@ -1,0 +1,159 @@
+// Prisma schema for CTC PM Automation Tool
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model PMSession {
+  id               String            @id @default(cuid())
+  customer         String
+  vendor           String            @default("fortigate")
+  engineerName     String?
+  pmDate           DateTime          @default(now())
+  status           String            @default("DRAFT") // DRAFT, IN_PROGRESS, REVIEW, COMPLETED
+  notes            String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  devices          Device[]
+  uploadedFiles    UploadedFile[]
+  generatedReports GeneratedReport[]
+
+  @@index([customer])
+  @@index([status])
+}
+
+model Device {
+  id              String            @id @default(cuid())
+  sessionId       String
+  session         PMSession         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  hostname        String
+  model           String?
+  serialNumber    String?
+  firmwareVersion String?
+  managementIp    String?
+  role            String?           // e.g. "Primary", "Secondary", "Standalone"
+  haStatus        String?           // "Active-Passive", "Active-Active", "Standalone"
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  commandExecutions CommandExecution[]
+  checklistResults  ChecklistResult[]
+
+  @@index([sessionId])
+  @@index([hostname])
+}
+
+model UploadedFile {
+  id               String      @id @default(cuid())
+  sessionId        String
+  session          PMSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  deviceId         String?
+  type             String      // "PUTTY_LOG", "WORD_REPORT", "GUI_SCREENSHOT", "OTHER"
+  originalFilename String
+  storedFilename   String
+  storagePath      String
+  hashSha256       String
+  sizeBytes        Int
+  mimeType         String
+  createdAt        DateTime    @default(now())
+
+  @@index([sessionId])
+  @@index([hashSha256])
+}
+
+model CommandExecution {
+  id            String     @id @default(cuid())
+  deviceId      String
+  device        Device     @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  command       String
+  commandGroup  String?    // "System", "Performance", "Interfaces", "Licensing", etc.
+  rawOutputRef  String?    // path or reference to raw snippet
+  outputContent String?    // text of command output if stored in db
+  parseStatus   String     @default("PENDING") // PENDING, PARSED, FAILED, UNSUPPORTED
+  parseError    String?
+  executedAt    DateTime?
+  createdAt     DateTime   @default(now())
+
+  evidences     Evidence[]
+
+  @@index([deviceId])
+  @@index([command])
+}
+
+model ChecklistResult {
+  id              String           @id @default(cuid())
+  deviceId        String
+  device          Device           @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  checkId         String           // stable check ID (e.g. "fg-sys-cpu", "fg-sys-mem")
+  checkName       String
+  sectionName     String?          // e.g. "Hardware Status", "Product Licensing"
+  targetAppendix  String?          // e.g. "Appendix 1", "Appendix 2"
+  collectionState String           @default("MISSING") // COMPLETE, INCOMPLETE, MISSING, UNSUPPORTED
+  status          String           @default("PENDING") // PASS, FAIL, WARNING, NA, REVIEW, PENDING
+  currentValue    String?          // Extracted value e.g. "18%"
+  expectedValue   String?          // Expected threshold e.g. "< 80%"
+  remarks         String?          // Engineer or system remarks
+  reviewRequired  Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  reviewDecisions ReviewDecision[]
+
+  @@unique([deviceId, checkId])
+  @@index([deviceId])
+  @@index([status])
+}
+
+model Evidence {
+  id                 String            @id @default(cuid())
+  commandExecutionId String?
+  commandExecution   CommandExecution? @relation(fields: [commandExecutionId], references: [id], onDelete: SetNull)
+  deviceId           String?
+  title              String
+  appendixMapping    String?           // e.g. "Appendix 1: System Status"
+  imageReference     String            // relative storage path to PNG evidence
+  caption            String?
+  isRedacted         Boolean           @default(false)
+  pageNumber         Int               @default(1)
+  totalPages         Int               @default(1)
+  sourceLabel        String            @default("Rendered from PuTTY session log")
+  createdAt          DateTime          @default(now())
+
+  @@index([commandExecutionId])
+}
+
+model ReviewDecision {
+  id                String          @id @default(cuid())
+  checklistResultId String
+  checklistResult   ChecklistResult @relation(fields: [checklistResultId], references: [id], onDelete: Cascade)
+  proposedStatus    String?
+  proposedRemarks   String?
+  decision          String          @default("PENDING") // PENDING, APPROVED, MODIFIED, REJECTED
+  finalStatus       String?
+  finalRemarks      String?
+  reviewer          String
+  reviewNotes       String?
+  decidedAt         DateTime        @default(now())
+
+  @@index([checklistResultId])
+}
+
+model GeneratedReport {
+  id               String    @id @default(cuid())
+  sessionId        String
+  session          PMSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  originalReportId String?
+  fileReference    String    // storage path
+  version          Int       @default(1)
+  generationStatus String    @default("PENDING") // PENDING, SUCCESS, FAILED
+  summary          String?
+  createdAt        DateTime  @default(now())
+
+  @@index([sessionId])
+}

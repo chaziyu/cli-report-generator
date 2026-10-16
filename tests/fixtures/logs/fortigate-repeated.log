@@ -1,0 +1,19 @@
+=~=~=~=~=~=~=~=~=~=~=~= PuTTY log 2026.08.15 12:00:00 =~=~=~=~=~=~=~=~=~=~=
+FGT-CORP # get system performance status
+CPU states: 1% user 2% system 0% nice 97% idle
+Memory: 16384000k total, 4915200k used (30%)
+Average sessions: 1200 concurrent sessions
+Uptime: 45 days, 2 hours, 10 minutes
+
+FGT-CORP # get system status
+Version: FortiGate-200F v7.4.11
+Serial-Number: FG200FTK21009999
+Hostname: FGT-CORP
+
+FGT-CORP # get system performance status
+CPU states: 2% user 2% system 0% nice 96% idle
+Memory: 16384000k total, 4980000k used (30%)
+Average sessions: 1220 concurrent sessions
+Uptime: 45 days, 2 hours, 12 minutes
+
+FGT-CORP # exit
