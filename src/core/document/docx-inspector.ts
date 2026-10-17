@@ -93,6 +93,10 @@ export class DocxInspector {
     const editableChecklistRows = layout.mapChecklistRows(tables);
     const appendixContainers = layout.mapAppendixContainers(documentXml, relsXml);
     const protectedSections = layout.identifyProtectedSections(tables);
+    const deviceSections = layout.detectDeviceSections
+      ? layout.detectDeviceSections(documentXml, tables)
+      : [];
+    const supportsMultiDeviceSections = deviceSections.length > 1;
 
     if (editableChecklistRows.length === 0) {
       warnings.push("No checklist items could be located in document tables.");
@@ -114,6 +118,8 @@ export class DocxInspector {
       editableChecklistRows,
       appendixContainers,
       protectedSections,
+      deviceSections,
+      supportsMultiDeviceSections,
       totalTables: tables.length,
       totalImages: mediaFiles.length || drawings.length,
       warnings,

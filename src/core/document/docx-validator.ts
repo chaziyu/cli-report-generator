@@ -11,12 +11,16 @@ export interface DocxValidationResult {
     relationshipsXml: boolean;
     protectedSectionsPreserved: boolean;
     mediaIntegrity: boolean;
+    headersFootersPreserved: boolean;
+    tableStructurePreserved: boolean;
+    appendixHeadingsPreserved: boolean;
+    contentTypesValid: boolean;
   };
 }
 
 export class DocxValidator {
   /**
-   * Validates a modified DOCX buffer against structural OOXML rules and protected sections.
+   * Validates a modified DOCX buffer against structural OOXML rules, relationships, and protected sections.
    */
   async validateModifiedDocument(
     modifiedBuffer: Buffer | Uint8Array,
@@ -30,6 +34,10 @@ export class DocxValidator {
       relationshipsXml: false,
       protectedSectionsPreserved: false,
       mediaIntegrity: false,
+      headersFootersPreserved: false,
+      tableStructurePreserved: false,
+      appendixHeadingsPreserved: false,
+      contentTypesValid: false,
     };
 
     let zip: JSZip;
@@ -48,7 +56,7 @@ export class DocxValidator {
       return { isValid: false, errors, warnings, checkedComponents: checked };
     }
 
-    let docXml: string;
+    let docXml: string = "";
     try {
       docXml = await docEntry.async("string");
       if (!docXml.includes("<w:document") || !docXml.includes("</w:document>")) {
@@ -84,7 +92,11 @@ export class DocxValidator {
       let missingMedia = 0;
       for (const ref of mediaRefs) {
         const target = ref[1];
-        const fullZipPath = target.startsWith("media/") ? `word/${target}` : target.startsWith("/") ? target.slice(1) : `word/${target}`;
+        const fullZipPath = target.startsWith("media/")
+          ? `word/${target}`
+          : target.startsWith("/")
+          ? target.slice(1)
+          : `word/${target}`;
         if (!zip.file(fullZipPath)) {
           errors.push(`Image relationship references missing media file in ZIP: '${fullZipPath}'`);
           missingMedia++;
@@ -97,29 +109,101 @@ export class DocxValidator {
       checked.mediaIntegrity = true;
     }
 
-    // 4. Verify protected sections are preserved
-    if (originalInspection && originalInspection.protectedSections.length > 0) {
-      const tables = docXml!.match(/<w:tbl[\s>][\s\S]*?<\/w:tbl>/g) || [];
-      let protectedViolated = false;
+    // 4. Verify headers and footers preserved
+    try {
+      const headerFooterFiles = Object.keys(zip.files).filter((p) =>
+        /^word\/(header|footer)\d+\.xml$/.test(p)
+      );
+      let hfValid = true;
+      for (const hfPath of headerFooterFiles) {
+        const hfContent = await zip.file(hfPath)?.async("string");
+        if (!hfContent || (!hfContent.includes("<w:hdr") && !hfContent.includes("<w:ftr"))) {
+          errors.push(`Header or footer part '${hfPath}' is missing root container.`);
+          hfValid = false;
+        }
+      }
+      checked.headersFootersPreserved = hfValid;
+    } catch (err) {
+      errors.push(`Failed to validate headers and footers: ${err instanceof Error ? err.message : String(err)}`);
+    }
 
-      for (const sec of originalInspection.protectedSections) {
-        if (sec.type === "TABLE" && sec.tableIndex !== undefined) {
-          if (sec.tableIndex >= tables.length) {
-            errors.push(`Protected section '${sec.name}' at table index ${sec.tableIndex} is missing in generated document.`);
-            protectedViolated = true;
-          } else {
-            const tableText = tables[sec.tableIndex].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
-            if (sec.name.toLowerCase().includes("author") && !tableText.toLowerCase().includes("name") && !tableText.toLowerCase().includes("designation")) {
-              errors.push(`Protected author details and sign-off section appears corrupted or altered.`);
+    // 5. Verify [Content_Types].xml
+    try {
+      const ctEntry = zip.file("[Content_Types].xml");
+      if (ctEntry) {
+        const ctXml = await ctEntry.async("string");
+        if (ctXml.includes("<Types") && ctXml.includes("image/png")) {
+          checked.contentTypesValid = true;
+        } else {
+          errors.push("Missing required image/png content type registration in [Content_Types].xml.");
+        }
+      } else {
+        errors.push("Missing root '[Content_Types].xml' entry.");
+      }
+    } catch (err) {
+      errors.push(`Failed to validate [Content_Types].xml: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // 6. Verify protected sections and structural tables
+    if (originalInspection) {
+      const tables = docXml.match(/<w:tbl[\s>][\s\S]*?<\/w:tbl>/g) || [];
+
+      // Check total tables preserved
+      if (tables.length < originalInspection.totalTables) {
+        errors.push(
+          `Document table structure compromised: original contained ${originalInspection.totalTables} tables, generated document has ${tables.length}.`
+        );
+        checked.tableStructurePreserved = false;
+      } else {
+        checked.tableStructurePreserved = true;
+      }
+
+      // Check protected sections
+      if (originalInspection.protectedSections.length > 0) {
+        let protectedViolated = false;
+
+        for (const sec of originalInspection.protectedSections) {
+          if (sec.type === "TABLE" && sec.tableIndex !== undefined) {
+            if (sec.tableIndex >= tables.length) {
+              errors.push(`Protected section '${sec.name}' at table index ${sec.tableIndex} is missing in generated document.`);
               protectedViolated = true;
+            } else {
+              const tableText = tables[sec.tableIndex].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+              if (
+                sec.name.toLowerCase().includes("author") &&
+                !tableText.toLowerCase().includes("name") &&
+                !tableText.toLowerCase().includes("designation")
+              ) {
+                errors.push(`Protected author details and sign-off section appears corrupted or altered.`);
+                protectedViolated = true;
+              }
             }
           }
         }
+
+        checked.protectedSectionsPreserved = !protectedViolated;
+      } else {
+        checked.protectedSectionsPreserved = true;
       }
 
-      checked.protectedSectionsPreserved = !protectedViolated;
+      // 7. Verify appendix headings preserved
+      if (originalInspection.appendixContainers.length > 0) {
+        let missingHeadings = 0;
+        for (const app of originalInspection.appendixContainers) {
+          const appPattern = new RegExp(`Appendix\\s*${app.appendixNumber}\\b`, "i");
+          if (!appPattern.test(docXml)) {
+            warnings.push(`Appendix heading for Appendix ${app.appendixNumber} was not located in modified text.`);
+            missingHeadings++;
+          }
+        }
+        checked.appendixHeadingsPreserved = missingHeadings === 0;
+      } else {
+        checked.appendixHeadingsPreserved = true;
+      }
     } else {
       checked.protectedSectionsPreserved = true;
+      checked.tableStructurePreserved = true;
+      checked.appendixHeadingsPreserved = true;
     }
 
     return {

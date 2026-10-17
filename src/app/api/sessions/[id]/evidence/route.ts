@@ -30,6 +30,13 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
       );
     }
 
+    if (targetDeviceId && !session.devices.some((d) => d.id === targetDeviceId)) {
+      return NextResponse.json(
+        { success: false, error: "Target device does not belong to this session" },
+        { status: 400 }
+      );
+    }
+
     const deviceIds = targetDeviceId
       ? [targetDeviceId]
       : session.devices.map((d) => d.id);
@@ -44,6 +51,15 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
             command: true,
             commandGroup: true,
             parseStatus: true,
+            outputContent: true,
+          },
+        },
+        uploadedFile: {
+          select: {
+            id: true,
+            originalFilename: true,
+            hashSha256: true,
+            sizeBytes: true,
           },
         },
       },
@@ -202,6 +218,7 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
             data: {
               commandExecutionId: exec.id,
               deviceId: device.id,
+              checkId: cmdDef?.mappedCheckIds?.[0] || null,
               title,
               appendixMapping,
               imageReference: stored.storagePath,

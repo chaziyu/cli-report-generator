@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { storage } from "@/lib/storage";
 import { FileCategory } from "@/lib/storage/types";
 import { guiEvidenceMapper } from "@/core/evidence/gui-evidence-mapper";
+import { reviewService } from "@/core/review";
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -175,6 +176,19 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       );
     }
 
+    if (deviceId !== undefined && deviceId !== null) {
+      const dev = await prisma.device.findUnique({
+        where: { id: deviceId },
+        select: { sessionId: true },
+      });
+      if (!dev || dev.sessionId !== sessionId) {
+        return NextResponse.json(
+          { success: false, error: "Target device does not belong to this session" },
+          { status: 400 }
+        );
+      }
+    }
+
     // Update deviceId on UploadedFile if provided
     const updatedFile = await prisma.uploadedFile.update({
       where: { id: fileId },
@@ -194,7 +208,12 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       },
     });
 
+    const oldDeviceId = existingEvidence?.deviceId || file.deviceId;
+    const oldCheckId = existingEvidence?.checkId;
+    const oldExcluded = existingEvidence?.isExcluded ?? false;
+
     if (existingEvidence) {
+      const targetExcluded = isExcluded !== undefined ? isExcluded : existingEvidence.isExcluded;
       updatedEvidence = await prisma.evidence.update({
         where: { id: existingEvidence.id },
         data: {
@@ -204,15 +223,51 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
           checkId: checkId !== undefined ? checkId : existingEvidence.checkId,
           deviceId: deviceId !== undefined ? deviceId : existingEvidence.deviceId,
           title: title !== undefined ? title : existingEvidence.title,
-          isExcluded: isExcluded !== undefined ? isExcluded : existingEvidence.isExcluded,
+          isExcluded: targetExcluded,
           caption:
             appendixMapping !== undefined
               ? `${appendixMapping}: ${title || existingEvidence.title}`
               : existingEvidence.caption,
         },
       });
+
+      // Recalculate findings if checkId, deviceId, or exclusion changed
+      const isMaterialChange =
+        updatedEvidence.checkId !== oldCheckId ||
+        updatedEvidence.deviceId !== oldDeviceId ||
+        updatedEvidence.isExcluded !== oldExcluded;
+
+      if (isMaterialChange) {
+        if (oldDeviceId && oldCheckId) {
+          await reviewService.recalculateFindingEvidenceState(
+            sessionId,
+            oldDeviceId,
+            oldCheckId,
+            "Evidence reassigned from finding."
+          );
+        }
+        if (
+          updatedEvidence.deviceId &&
+          updatedEvidence.checkId &&
+          (updatedEvidence.deviceId !== oldDeviceId || updatedEvidence.checkId !== oldCheckId)
+        ) {
+          await reviewService.recalculateFindingEvidenceState(
+            sessionId,
+            updatedEvidence.deviceId,
+            updatedEvidence.checkId,
+            "New evidence assigned to finding."
+          );
+        } else if (updatedEvidence.deviceId && updatedEvidence.checkId) {
+          await reviewService.recalculateFindingEvidenceState(
+            sessionId,
+            updatedEvidence.deviceId,
+            updatedEvidence.checkId,
+            updatedEvidence.isExcluded ? "Evidence excluded from report." : "Evidence restored to report."
+          );
+        }
+      }
     } else if (file.type === "GUI_SCREENSHOT") {
-      // Create evidence record if it was previously excluded from report
+      // Create evidence record if none existed, respecting explicit isExcluded
       updatedEvidence = await prisma.evidence.create({
         data: {
           commandExecutionId: null,
@@ -223,11 +278,20 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
           appendixMapping: appendixMapping || null,
           imageReference: file.storagePath,
           sourceLabel: "Uploaded GUI screenshot",
-          isExcluded: false,
+          isExcluded: isExcluded !== undefined ? isExcluded : false,
           pageNumber: 1,
           totalPages: 1,
         },
       });
+
+      if (updatedEvidence.deviceId && updatedEvidence.checkId && !updatedEvidence.isExcluded) {
+        await reviewService.recalculateFindingEvidenceState(
+          sessionId,
+          updatedEvidence.deviceId,
+          updatedEvidence.checkId,
+          "New GUI screenshot mapped to finding."
+        );
+      }
     }
 
     return NextResponse.json({

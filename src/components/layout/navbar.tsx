@@ -57,7 +57,7 @@ export function Navbar() {
 
         <div className="flex items-center gap-4">
           <div className="hidden sm:flex items-center gap-2 rounded-full border border-slate-700 bg-[#0c1222] px-3.5 py-1 text-xs text-slate-300 font-medium shadow-sm">
-            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="h-2 w-2 rounded-full bg-emerald-400" />
             <span>Local Engine · Node.js</span>
             <span className="text-slate-600">|</span>
             <span className="text-slate-200">SQLite + Prisma</span>

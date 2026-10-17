@@ -59,6 +59,15 @@ export interface ProtectedSection {
   reason: string;
 }
 
+export interface DeviceSectionTarget {
+  sectionIndex: number;
+  tableIndex?: number;
+  hostname?: string;
+  model?: string;
+  serialNumber?: string;
+  isPrimary?: boolean;
+}
+
 export interface DocumentInspectionResult {
   isValidDocx: boolean;
   sha256Hash: string;
@@ -71,6 +80,8 @@ export interface DocumentInspectionResult {
   editableChecklistRows: EditableChecklistRowTarget[];
   appendixContainers: AppendixContainerTarget[];
   protectedSections: ProtectedSection[];
+  deviceSections?: DeviceSectionTarget[];
+  supportsMultiDeviceSections?: boolean;
   totalTables: number;
   totalImages: number;
   warnings: string[];
@@ -87,4 +98,5 @@ export interface ReportLayoutDefinition {
   mapAppendixContainers(documentXml: string, relsXml?: string): AppendixContainerTarget[];
   extractMetadata(documentXml: string, tables: string[]): DocumentMetadata;
   identifyProtectedSections(tables: string[]): ProtectedSection[];
+  detectDeviceSections?(documentXml: string, tables: string[]): DeviceSectionTarget[];
 }

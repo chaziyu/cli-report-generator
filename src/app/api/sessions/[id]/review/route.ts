@@ -43,6 +43,13 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
       );
     }
 
+    if (targetDeviceId && !session.devices.some((d) => d.id === targetDeviceId)) {
+      return NextResponse.json(
+        { success: false, error: "Target device does not belong to this session" },
+        { status: 400 }
+      );
+    }
+
     const currentDevice = targetDeviceId
       ? session.devices.find((d) => d.id === targetDeviceId) || session.devices[0]
       : session.devices[0];
@@ -86,22 +93,52 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
       },
     });
 
-    // 3. Fetch rendered Evidence for target device
+    // 3. Fetch rendered CLI & GUI Evidence for target device and unassigned GUI session screenshots
     const evidences = await prisma.evidence.findMany({
-      where: { deviceId: currentDevice.id },
+      where: {
+        OR: [
+          { deviceId: currentDevice.id },
+          {
+            deviceId: null,
+            uploadedFile: { sessionId },
+          },
+        ],
+      },
+      include: {
+        commandExecution: {
+          select: {
+            command: true,
+            commandGroup: true,
+            parseStatus: true,
+            parseError: true,
+            outputContent: true,
+          },
+        },
+        uploadedFile: {
+          select: {
+            id: true,
+            originalFilename: true,
+            hashSha256: true,
+            sizeBytes: true,
+            mimeType: true,
+          },
+        },
+      },
       orderBy: [{ appendixMapping: "asc" }, { pageNumber: "asc" }],
     });
 
     // 4. Flatten all latest review decisions
     const flatDecisions = checklistResults.flatMap((r) => r.reviewDecisions);
 
-    // 5. Build combined review items
+    // 5. Build combined review items with rich evidence and health tracking
     const reviewItems = reviewService.buildReviewItems({
       checklistDefinitions,
       docRowTargets,
       checklistResults,
       evidences,
       decisions: flatDecisions,
+      targetDeviceId: currentDevice.id,
+      deviceHostname: currentDevice.hostname,
     });
 
     // Fix evidence image URLs to point to this session's evidence endpoint
@@ -211,20 +248,25 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
     const resultByCheckId = new Map(existingResults.map((r) => [r.checkId, r]));
 
     const evidences = await prisma.evidence.findMany({
-      where: { deviceId: targetDevice.id },
+      where: { deviceId: targetDevice.id, isExcluded: false },
     });
 
     const decisionsToProcess: ReviewDecisionInput[] = [];
     const skippedItems: string[] = [];
 
     const checkHasEvidence = (
-      targetAppendix?: string | null,
-      evs: Array<{ appendixMapping?: string | null }> = []
+      def: { id: string; targetAppendix?: string | null },
+      evs: Array<{ checkId?: string | null; appendixMapping?: string | null; isExcluded?: boolean }> = []
     ): boolean => {
-      if (!targetAppendix) return true;
-      const cleanTarget = targetAppendix.toLowerCase().replace(/[^a-z0-9]/g, "");
+      // 1. Check direct stable checkId match
+      if (evs.some((e) => !e.isExcluded && e.checkId === def.id)) {
+        return true;
+      }
+      // 2. Appendix mapping fallback
+      if (!def.targetAppendix) return true;
+      const cleanTarget = def.targetAppendix.toLowerCase().replace(/[^a-z0-9]/g, "");
       return evs.some((e) => {
-        if (!e.appendixMapping) return false;
+        if (e.isExcluded || !e.appendixMapping) return false;
         const cleanMap = e.appendixMapping.toLowerCase().replace(/[^a-z0-9]/g, "");
         return cleanMap.includes(cleanTarget) || cleanTarget.includes(cleanMap);
       });
@@ -234,14 +276,23 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
       for (const def of checklistDefinitions) {
         const result = resultByCheckId.get(def.id);
         const evalStatus = reviewService.normalizeStatus(result?.status || "PENDING");
-        const hasEv = checkHasEvidence(def.targetAppendix, evidences);
+        const hasEv = checkHasEvidence(def, evidences);
 
         const isEvidenceMissing = Boolean(def.targetAppendix) && (!hasEv || result?.collectionState === "MISSING");
         const isWarningOrFail = evalStatus === "FAIL" || evalStatus === "WARNING";
 
         // In APPROVE_PASSING mode: only approve clean checks that passed and have required evidence
         if (action === "APPROVE_PASSING") {
-          if (evalStatus === "PASS" && !isEvidenceMissing) {
+          const isEligible = reviewService.isEligibleForPassingBatchApproval({
+            sourceType: def.sourceType,
+            status: result?.status || "PENDING",
+            collectionState: result?.collectionState || "MISSING",
+            requiresEvidence: Boolean(def.targetAppendix),
+            hasEvidence: hasEv,
+            reviewRequired: result?.reviewRequired,
+          });
+
+          if (isEligible) {
             decisionsToProcess.push({
               checkId: def.id,
               decision: "APPROVED",
@@ -315,7 +366,7 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
         resultByCheckId.set(def.id, checklistResult);
       }
 
-      const hasEv = checkHasEvidence(def.targetAppendix, evidences);
+      const hasEv = checkHasEvidence(def, evidences);
 
       // Validate decision using ReviewService
       const validation = reviewService.validateDecision(
@@ -344,12 +395,13 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
         );
       }
 
-      // Persist ReviewDecision in SQLite
+      // Persist ReviewDecision in SQLite with current evidence fingerprint
       const createdDecision = await prisma.reviewDecision.create({
         data: {
           checklistResultId: checklistResult.id,
           proposedStatus: checklistResult.status,
           proposedRemarks: checklistResult.remarks,
+          evidenceFingerprint: checklistResult.evidenceFingerprint,
           decision: dec.decision,
           finalStatus:
             dec.decision === "REJECTED"

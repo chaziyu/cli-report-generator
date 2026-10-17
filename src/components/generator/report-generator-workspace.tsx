@@ -21,6 +21,7 @@ import {
   Building,
   Sparkles,
   Play,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -30,7 +31,12 @@ import { metadataReconciler, ReconciledMetadata } from "@/core/session/metadata-
 import { CliCommandSection } from "@/components/commands";
 import { GuiScreenshotUploader } from "@/components/evidence";
 import { PipelineSummaryCard } from "./pipeline-summary-card";
+import { InlineReviewSection } from "./inline-review-section";
+import { ReportDownloadSection } from "./report-download-section";
 import { PipelineProcessResult } from "@/core/workflow/pipeline-types";
+import { useSessionRecovery } from "./hooks/use-session-recovery";
+import { AttachedFilesCard } from "./attached-files-card";
+import { ReconstructedPipelineCard } from "./reconstructed-pipeline-card";
 
 export interface RecentSessionItem {
   id: string;
@@ -63,6 +69,17 @@ export function ReportGeneratorWorkspace({
 }: {
   initialSessions: RecentSessionItem[];
 }) {
+  // Phase 8: Autosave & Session Recovery Hook
+  const {
+    sessionId: activeSessionId,
+    recoveryData,
+    isLoading: isRecovering,
+    error: recoveryError,
+    loadSession,
+    startNewSession,
+    refreshRecovery,
+  } = useSessionRecovery();
+
   // Staged files (local state before upload)
   const [stagedDocx, setStagedDocx] = useState<File | null>(null);
   const [stagedLog, setStagedLog] = useState<File | null>(null);
@@ -95,21 +112,34 @@ export function ReportGeneratorWorkspace({
     Array<{ id: string; hostname: string; role: string | null }>
   >([]);
 
-  // Keep session devices synced when sessionId changes
+  // Review Data state (allows resuming review after refresh without re-running pipeline)
+  const [hasReviewData, setHasReviewData] = useState(false);
+
+  // Synchronize recoveryData with component state when recovered or switched (Adjustment 3 & 7)
   useEffect(() => {
-    if (!sessionId) {
+    if (recoveryData) {
+      setSessionId(recoveryData.session.id);
+      setVendor(recoveryData.session.vendor);
+      setEditCustomer(recoveryData.metadata.customer || recoveryData.session.customer);
+      setEditModel(recoveryData.metadata.model || "");
+      setEditHostname(recoveryData.metadata.primaryHostname || "");
+      setMetadata(recoveryData.metadata as any);
+      setSessionDevices(recoveryData.devices);
+      setHasReviewData(recoveryData.reviewState.totalFindings > 0);
+    } else {
+      // Clean slate when starting new session or switching
+      setSessionId(null);
+      setMetadata(null);
       setSessionDevices([]);
-      return;
+      setHasReviewData(false);
+      setPipelineResult(null);
+      setStagedDocx(null);
+      setStagedLog(null);
+      setUploadError(null);
+      setUploadSuccess(null);
+      setPipelineError(null);
     }
-    fetch(`/api/sessions/${sessionId}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && data.data?.devices) {
-          setSessionDevices(data.data.devices);
-        }
-      })
-      .catch((err) => console.error("Failed to load session devices:", err));
-  }, [sessionId]);
+  }, [recoveryData]);
 
   // File input refs
   const docxInputRef = useRef<HTMLInputElement>(null);
@@ -179,6 +209,7 @@ export function ReportGeneratorWorkspace({
     if (createData.data.devices) {
       setSessionDevices(createData.data.devices);
     }
+    await loadSession(newId);
     return newId;
   };
 
@@ -288,6 +319,7 @@ export function ReportGeneratorWorkspace({
       }
 
       setUploadSuccess("Files uploaded and verified. Metadata extracted successfully.");
+      await refreshRecovery();
     } catch (err: unknown) {
       setUploadError(err instanceof Error ? err.message : "Error processing uploaded files");
     } finally {
@@ -350,6 +382,7 @@ export function ReportGeneratorWorkspace({
       }
 
       setPipelineResult(procData.data);
+      await refreshRecovery();
 
       // Refresh session devices from backend
       try {
@@ -445,7 +478,7 @@ export function ReportGeneratorWorkspace({
   };
 
   return (
-    <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    <div className="mx-auto max-w-6xl px-3 sm:px-6 lg:px-8 py-6 space-y-6 w-full">
       {/* Workspace Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 border-b border-slate-800">
         <div>
@@ -463,6 +496,20 @@ export function ReportGeneratorWorkspace({
         </div>
 
         <div className="flex items-center gap-3">
+          {sessionId && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={startNewSession}
+              className="gap-1.5 border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs h-8"
+              title="Clear active workspace to start a new session (existing saved sessions are preserved)"
+            >
+              <RotateCcw className="h-3.5 w-3.5 text-blue-400" />
+              <span>New Session</span>
+            </Button>
+          )}
+
           <label className="text-xs font-medium text-slate-400">Vendor Adapter:</label>
           <select
             value={vendor}
@@ -478,6 +525,16 @@ export function ReportGeneratorWorkspace({
 
       {/* CLI Command Reference Section (Phase 2) */}
       <CliCommandSection vendor={vendor} />
+
+      {/* Attached Evidence Files (if session already has files in SQLite - Phase 8) */}
+      {recoveryData?.files && (recoveryData.files.docxReport || recoveryData.files.puttyLogs.length > 0) && (
+        <AttachedFilesCard
+          files={recoveryData.files}
+          onUploadAdditional={() => {
+            docxInputRef.current?.click();
+          }}
+        />
+      )}
 
       {/* Upload & Staging Area */}
       <Card className="border-slate-800 bg-[#070b14]">
@@ -636,77 +693,7 @@ export function ReportGeneratorWorkspace({
         </CardContent>
       </Card>
 
-      {/* GUI Screenshots & Manual Evidence (Phase 3) */}
-      <GuiScreenshotUploader
-        sessionId={sessionId}
-        devices={sessionDevices}
-        vendor={vendor}
-        onEnsureSession={ensureSession}
-      />
-
-      {/* Generate PM Report Single-Action Execution Panel (Phase 4) */}
-      <Card className="border-slate-800 bg-gradient-to-r from-[#070b14] via-[#0c1222] to-[#070b14] shadow-xl overflow-hidden border-emerald-500/20">
-        <CardContent className="p-4 sm:p-5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                <h3 className="text-base font-semibold text-white">Automated PM Report Generation</h3>
-                <Badge
-                  variant="outline"
-                  className="border-emerald-500/40 text-emerald-300 bg-emerald-950/40 text-[10px] font-mono"
-                >
-                  QMS-P09-F01 v1.1
-                </Badge>
-              </div>
-              <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-                Executes complete pipeline in one action: inspects CTC Word tables, segments PuTTY commands,
-                deterministically evaluates 21 PM rules, and atomically renders terminal screenshot evidence.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3 shrink-0">
-              <Button
-                size="lg"
-                onClick={handleGenerateReport}
-                disabled={isProcessing || (!stagedDocx && !stagedLog && !sessionId)}
-                className="gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm px-6 h-11 shadow-lg shadow-emerald-950/50 transition-all hover:scale-[1.02] active:scale-[0.98]"
-              >
-                {isProcessing ? (
-                  <>
-                    <RefreshCw className="h-4 w-4 animate-spin text-white" />
-                    <span>Processing PM Report...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="h-4 w-4 text-emerald-200" />
-                    <span>Generate PM Report</span>
-                  </>
-                )}
-              </Button>
-            </div>
-          </div>
-
-          {/* Processing Error Banner */}
-          {pipelineError && (
-            <div className="mt-4 flex items-center gap-2.5 rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-300">
-              <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
-              <span>{pipelineError}</span>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Pipeline Summary Card (Phase 4 Results & Review Entrypoint) */}
-      {pipelineResult && (
-        <PipelineSummaryCard
-          result={pipelineResult}
-          onRetry={handleGenerateReport}
-          onConfirmDeviceMapping={handleConfirmDeviceMapping}
-        />
-      )}
-
-      {/* Detected Report Information Card (Issue 1 & 2) */}
+      {/* Detected Report Information Card (Extracted from uploaded Word report & PuTTY log) */}
       {metadata && (
         <Card className="border-slate-800 bg-[#0c1222] shadow-md">
           <CardHeader className="flex flex-row items-center justify-between pb-3">
@@ -855,24 +842,118 @@ export function ReportGeneratorWorkspace({
               </div>
             )}
 
-            {/* Quick Action to Session Workspace */}
             {sessionId && (
-              <div className="flex items-center justify-between pt-4 border-t border-slate-800">
-                <span className="text-xs text-slate-400">
-                  Session initialized: <span className="font-mono text-slate-300">{sessionId}</span>
+              <div className="flex items-center justify-between pt-3 border-t border-slate-800 text-xs text-slate-400">
+                <span>
+                  Active Session: <span className="font-mono text-slate-300">{sessionId}</span>
                 </span>
-
-                <Link href={`/sessions/${sessionId}`}>
-                  <Button className="gap-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold">
-                    <span>Open PM Workspace</span>
-                    <ArrowRight className="h-4 w-4" />
-                  </Button>
-                </Link>
+                <span className="text-[11px] text-slate-500">
+                  Reviews and evidence changes auto-saved to SQLite
+                </span>
               </div>
             )}
           </CardContent>
         </Card>
       )}
+
+      {/* GUI Screenshots & Manual Evidence */}
+      <GuiScreenshotUploader
+        sessionId={sessionId}
+        devices={sessionDevices}
+        vendor={vendor}
+        onEnsureSession={ensureSession}
+      />
+
+      {/* Generate PM Report Single-Action Execution Panel */}
+      <Card className="border-slate-800 bg-[#070b14] shadow-md">
+        <CardContent className="p-4 sm:p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                <h3 className="text-base font-semibold text-white">Automated PM Report Generation</h3>
+                <Badge
+                  variant="outline"
+                  className="border-emerald-500/40 text-emerald-300 bg-emerald-950/40 text-[10px] font-mono"
+                >
+                  QMS-P09-F01 v1.1
+                </Badge>
+              </div>
+              <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
+                Executes complete pipeline in one action: inspects CTC Word tables, segments PuTTY commands,
+                deterministically evaluates 21 PM rules, and atomically renders terminal screenshot evidence.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 shrink-0">
+              <Button
+                size="lg"
+                onClick={handleGenerateReport}
+                disabled={isProcessing || (!stagedDocx && !stagedLog && !sessionId)}
+                className="gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm px-6 h-11 transition-colors cursor-pointer"
+              >
+                {isProcessing ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin text-white" />
+                    <span>Processing PM Report...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4 text-emerald-200" />
+                    <span>Generate PM Report</span>
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+
+          {/* Processing Error Banner */}
+          {pipelineError && (
+            <div className="mt-4 flex items-center gap-2.5 rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-300">
+              <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+              <span>{pipelineError}</span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Pipeline Summary Card (Phase 4 Results & Review Entrypoint) */}
+      {pipelineResult && (
+        <PipelineSummaryCard
+          result={pipelineResult}
+          onRetry={handleGenerateReport}
+          onConfirmDeviceMapping={handleConfirmDeviceMapping}
+        />
+      )}
+
+      {/* Reconstructed Pipeline Card (Adjustment 2: authoritative restored state without fabrication) */}
+      {!pipelineResult && recoveryData?.pipelineState.hasRun && (
+        <ReconstructedPipelineCard
+          pipelineState={recoveryData.pipelineState}
+          onRerun={handleGenerateReport}
+          isProcessing={isProcessing}
+        />
+      )}
+
+      {/* Inline Engineer Findings Review (Phase 5) */}
+      {sessionId && (pipelineResult || hasReviewData) && (
+        <InlineReviewSection
+          sessionId={sessionId}
+          onReviewUpdated={() => {
+            setHasReviewData(true);
+            refreshRecovery();
+          }}
+        />
+      )}
+
+      {/* Word Report Export & Download Section (Phase 7) */}
+      {sessionId && (pipelineResult || hasReviewData) && (
+        <ReportDownloadSection
+          sessionId={sessionId}
+          onExportComplete={() => refreshRecovery()}
+        />
+      )}
+
 
       {/* Compact Collapsible Recent Reports Section (Issue 9) */}
       <div className="pt-4 border-t border-slate-800">
@@ -923,16 +1004,30 @@ export function ReportGeneratorWorkspace({
                       </div>
                     </div>
 
-                    <Link href={`/sessions/${session.id}`}>
+                    <div className="flex items-center gap-2">
                       <Button
                         size="sm"
-                        variant="outline"
-                        className="gap-1.5 border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs"
+                        onClick={() => {
+                          loadSession(session.id);
+                          window.scrollTo({ top: 0, behavior: "smooth" });
+                        }}
+                        className="gap-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs h-8"
                       >
-                        <span>Resume</span>
+                        <span>Resume on Generator</span>
                         <ArrowRight className="h-3.5 w-3.5" />
                       </Button>
-                    </Link>
+
+                      <Link href={`/sessions/${session.id}`}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1.5 border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs h-8"
+                          title="Open multi-tab session overview workspace"
+                        >
+                          <span>Workspace</span>
+                        </Button>
+                      </Link>
+                    </div>
                   </div>
                 ))}
               </div>

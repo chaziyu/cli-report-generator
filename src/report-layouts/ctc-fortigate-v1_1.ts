@@ -5,6 +5,7 @@ import {
   AppendixContainerTarget,
   ProtectedSection,
   CheckboxOption,
+  DeviceSectionTarget,
 } from "./types";
 import { FORTIGATE_CHECKLIST } from "@/vendors/fortigate/checklist";
 
@@ -431,6 +432,31 @@ export class CtcFortiGateLayoutV1_1 implements ReportLayoutDefinition {
     }
 
     return { checkIds: [] };
+  }
+
+  /**
+   * Detects device sections present in the Word document.
+   * Identifies whether the template is formatted for a single device or contains multiple device sections.
+   */
+  detectDeviceSections(documentXml: string, tables: string[]): DeviceSectionTarget[] {
+    const sections: DeviceSectionTarget[] = [];
+    for (let i = 0; i < tables.length; i++) {
+      const tText = stripXml(tables[i]);
+      if (tText.includes("Model") && (tText.includes("Serial") || tText.includes("Hostname"))) {
+        const hostMatch = tText.match(/Hostname\s*[:\s]+([A-Za-z0-9_\-]+)/i);
+        const modelMatch = tText.match(/Model\s*[:\s]+(Forti[A-Za-z0-9_\-\s]+?)(?:Hostname|Serial|PM Date|$)/i);
+        const serialMatch = tText.match(/(?:Serial\s*No|Serial\s*Number|Serial)\s*[:\s]+([A-Za-z0-9_\-]+)/i);
+        sections.push({
+          sectionIndex: sections.length,
+          tableIndex: i,
+          hostname: hostMatch ? hostMatch[1].trim() : undefined,
+          model: modelMatch ? modelMatch[1].trim() : undefined,
+          serialNumber: serialMatch ? serialMatch[1].trim() : undefined,
+          isPrimary: sections.length === 0,
+        });
+      }
+    }
+    return sections;
   }
 }
 

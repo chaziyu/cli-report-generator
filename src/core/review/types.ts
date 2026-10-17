@@ -19,29 +19,65 @@ export interface ReviewProposedEvaluationValue {
   proposedRemarks: string | null;
   collectionState: string; // "COMPLETE", "INCOMPLETE", "MISSING", "UNSUPPORTED"
   reviewRequired: boolean;
+  evidenceFingerprint?: string | null;
   ruleId?: string;
   ruleNotes?: string;
   sourceCommand?: string;
 }
 
+export type EvidenceSourceType = "CLI" | "GUI_SCREENSHOT";
+export type EvidenceHealthStatus =
+  | "HEALTHY"
+  | "MISSING"
+  | "INCOMPLETE"
+  | "TRUNCATED"
+  | "CONFLICTING"
+  | "MISMAPPED";
+
+export interface EvidenceHealthSummary {
+  status: EvidenceHealthStatus;
+  message?: string | null;
+  hasRequiredEvidence: boolean;
+  cliCount: number;
+  guiCount: number;
+  excludedCount: number;
+  isTruncated: boolean;
+  isConflicting: boolean;
+}
+
 export interface ReviewEvidenceSummary {
   id: string;
+  checkId?: string | null;
+  deviceId?: string | null;
+  deviceHostname?: string;
+  sourceType: EvidenceSourceType;
+  sourceLabel: string;
+  originalFilename?: string | null;
+  hashSha256?: string | null;
+  sizeBytes?: number | null;
   title: string;
   appendixMapping: string | null;
   caption: string | null;
   imageUrl: string;
   isRedacted: boolean;
+  isExcluded: boolean;
   pageNumber: number;
   totalPages: number;
+  command?: string | null;
+  rawOutputSnippet?: string | null;
+  parseStatus?: string | null;
+  parseError?: string | null;
+  uploadedFileId?: string | null;
 }
 
 export interface ReviewDecisionRecord {
   id: string | null;
-  decision: ReviewDecisionType;
+  decision: ReviewDecisionType | "SUPERSEDED";
   finalStatus: string;
   finalRemarks: string;
   reviewer: string | null;
   reviewNotes: string | null;
+  evidenceFingerprint?: string | null;
   decidedAt: string | null;
 }
 
@@ -62,8 +98,11 @@ export interface ReviewCheckItem {
   // Automated evaluation values
   proposedEvaluation: ReviewProposedEvaluationValue;
 
-  // Rendered terminal evidence
+  // Rendered terminal evidence and uploaded screenshots
   evidence: ReviewEvidenceSummary[];
+
+  // Evidence Health & Integrity
+  evidenceHealth: EvidenceHealthSummary;
 
   // Saved or pending review decision
   decision: ReviewDecisionRecord;
@@ -73,6 +112,9 @@ export interface ReviewCheckItem {
   isStatusOverridden: boolean;
   isRemarksModified: boolean;
   requiresJustification: boolean;
+  reReviewRequired: boolean;
+  isEligibleForExport: boolean;
+  isEligibleForBatchPass: boolean;
 }
 
 export interface ReviewDecisionInput {
@@ -94,4 +136,7 @@ export interface ReviewSessionSummary {
   failures: number;
   exceptions: number;
   diffsCount: number;
+  needsAttentionCount: number;
+  reReviewRequiredCount: number;
+  eligibleForBatchCount: number;
 }

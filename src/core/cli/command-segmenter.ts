@@ -40,7 +40,7 @@ export class CommandSegmenter {
     let currentPrompt: ParsedPromptLine | null = null;
     let currentOutputLines: string[] = [];
     let currentLineStart = 0;
-    let prologueLines: string[] = [];
+    const prologueLines: string[] = [];
     let foundFirstCommand = false;
     let lastHostname: string | undefined = undefined;
 

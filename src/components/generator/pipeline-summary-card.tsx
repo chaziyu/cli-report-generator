@@ -72,12 +72,18 @@ export function PipelineSummaryCard({
           </div>
 
           <div className="flex items-center gap-2">
-            <Link href={`/sessions/${sessionId}/review`}>
-              <Button className="gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs h-8">
-                <span>Open Engineer Review</span>
-                <ArrowRight className="h-3.5 w-3.5" />
-              </Button>
-            </Link>
+            <Button
+              onClick={() => {
+                const el = document.getElementById("inline-review-section");
+                if (el) {
+                  el.scrollIntoView({ behavior: "smooth" });
+                }
+              }}
+              className="gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs h-8 shadow-sm"
+            >
+              <span>Review Findings</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
           </div>
         </div>
       </CardHeader>
@@ -148,7 +154,7 @@ export function PipelineSummaryCard({
         )}
 
         {/* Metrics Overview Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2.5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
           <div className="rounded border border-slate-800 bg-[#0c1222] p-2.5 text-center">
             <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Passed</span>
             <span className="text-lg font-bold text-emerald-400 flex items-center justify-center gap-1 mt-0.5">

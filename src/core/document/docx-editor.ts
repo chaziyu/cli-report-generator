@@ -5,7 +5,6 @@ import { docxValidator, DocxValidationResult } from "./docx-validator";
 import {
   DocumentInspectionResult,
   EditableChecklistRowTarget,
-  AppendixContainerTarget,
 } from "@/report-layouts/types";
 
 export interface DecisionToApply {
@@ -17,11 +16,16 @@ export interface DecisionToApply {
 }
 
 export interface EvidenceToInsert {
+  id?: string;
   checkIds: string[];
   appendixNumber?: number;
   imageBuffer: Buffer | Uint8Array;
   title: string;
   caption?: string;
+  pageNumber?: number;
+  totalPages?: number;
+  sourceLabel?: string;
+  replaceExistingMedia?: boolean; // Explicit engineer approval required to overwrite original media
 }
 
 export interface AppliedRowChange {
@@ -37,9 +41,10 @@ export interface AppliedRowChange {
 export interface AppliedAppendixChange {
   appendixNumber: number;
   appendixTitle: string;
-  action: "REPLACED_EXISTING" | "INSERTED_NEW";
+  action: "PRESERVED_ORIGINAL_AND_APPENDED" | "REPLACED_EXISTING" | "INSERTED_NEW";
   imageRelId: string;
   imagePath: string;
+  title?: string;
 }
 
 export interface ReportChangeSummary {
@@ -106,7 +111,7 @@ export class DocxEditor {
     let documentXml = await docEntry.async("string");
 
     const relsEntry = zip.file("word/_rels/document.xml.rels");
-    let relsXml = relsEntry ? await relsEntry.async("string") : "";
+    const relsXml = relsEntry ? await relsEntry.async("string") : "";
     const relsManager = OoxmlRelationships.fromXml(relsXml);
 
     // 4. Ensure PNG image content type is registered in [Content_Types].xml
@@ -138,7 +143,7 @@ export class DocxEditor {
       const targetsInTable = targetsByTable.get(tIdx);
       if (!targetsInTable || targetsInTable.length === 0) continue;
 
-      let tableXml = tables[tIdx];
+      const tableXml = tables[tIdx];
       const rows = tableXml.match(/<w:tr[\s>][\s\S]*?<\/w:tr>/g) || [];
 
       let tableModified = false;
@@ -151,7 +156,7 @@ export class DocxEditor {
 
         if (target.rowIndex >= rows.length) continue;
 
-        let rowXml = rows[target.rowIndex];
+        const rowXml = rows[target.rowIndex];
         const cells = rowXml.match(/<w:tc[\s>][\s\S]*?<\/w:tc>/g) || [];
 
         if (target.statusCellIndex >= cells.length || target.remarksCellIndex >= cells.length) {
@@ -200,66 +205,91 @@ export class DocxEditor {
       }
     }
 
-    // 8. Apply Appendix Evidence Images
+    // 8. Apply Appendix Evidence Images (Preserve original by default, append multi-images, replace only if approved)
+    let docPrCounter = 2000;
     for (const container of inspection.appendixContainers) {
       // Find matching evidence for this appendix
-      const matchingEv = evidences.find((ev) =>
-        ev.appendixNumber === container.appendixNumber ||
+      const matchingEvs = evidences.filter((ev) =>
+        (ev.appendixNumber !== undefined && ev.appendixNumber === container.appendixNumber) ||
         ev.checkIds.some((id) => container.checkIds.includes(id))
       );
 
-      if (!matchingEv) continue;
+      if (matchingEvs.length === 0) continue;
 
-      if (container.existingImagePath) {
-        // Option A: Overwrite existing media image in ZIP package directly
-        const cleanPath = container.existingImagePath.startsWith("media/")
-          ? `word/${container.existingImagePath}`
-          : `word/media/${container.existingImagePath}`;
+      let replacedExisting = false;
 
-        zip.file(cleanPath, matchingEv.imageBuffer);
+      for (let evIndex = 0; evIndex < matchingEvs.length; evIndex++) {
+        const ev = matchingEvs[evIndex];
 
-        appliedAppendixChanges.push({
-          appendixNumber: container.appendixNumber,
-          appendixTitle: container.appendixTitle,
-          action: "REPLACED_EXISTING",
-          imageRelId: container.existingImageRelId || "embedded",
-          imagePath: container.existingImagePath,
-        });
-      } else {
-        // Option B: Add new image file and relationship
-        const newFileName = `image_app_${container.appendixNumber}.png`;
-        const newRelPath = `media/${newFileName}`;
-        zip.file(`word/${newRelPath}`, matchingEv.imageBuffer);
+        // Explicit replacement check
+        if (ev.replaceExistingMedia && container.existingImagePath && !replacedExisting) {
+          const cleanPath = container.existingImagePath.startsWith("media/")
+            ? `word/${container.existingImagePath}`
+            : `word/media/${container.existingImagePath}`;
 
-        const newRelId = relsManager.addImageRelationship(newRelPath);
+          zip.file(cleanPath, ev.imageBuffer);
+          replacedExisting = true;
 
-        // Insert image drawing run into the appendix table cell/row
-        if (
-          container.tableIndex !== undefined &&
-          container.tableIndex < tables.length &&
-          container.rowIndex !== undefined
-        ) {
-          const tableXml = tables[container.tableIndex];
-          const rows = tableXml.match(/<w:tr[\s>][\s\S]*?<\/w:tr>/g) || [];
-          if (container.rowIndex < rows.length) {
-            const rowXml = rows[container.rowIndex];
-            const drawingXml = this.generateInlineDrawingXml(newRelId, matchingEv.title);
+          appliedAppendixChanges.push({
+            appendixNumber: container.appendixNumber,
+            appendixTitle: container.appendixTitle,
+            action: "REPLACED_EXISTING",
+            imageRelId: container.existingImageRelId || "embedded",
+            imagePath: container.existingImagePath,
+            title: ev.title,
+          });
+        } else {
+          // Default: Preserve original media file untouched and append approved evidence
+          const newFileName = `image_app_${container.appendixNumber}_${evIndex + 1}_${Math.floor(Math.random() * 9000 + 1000)}.png`;
+          const newRelPath = `media/${newFileName}`;
+          zip.file(`word/${newRelPath}`, ev.imageBuffer);
 
-            // Append drawing inside paragraph of cell
-            const updatedRowXml = rowXml.replace(
-              /<\/w:p>/,
-              `<w:r>${drawingXml}</w:r></w:p>`
-            );
+          const newRelId = relsManager.addImageRelationship(newRelPath);
+          const dimensions = this.getPngDimensions(ev.imageBuffer);
+          const drawingXml = this.generateInlineDrawingXml(newRelId, ev.title, dimensions, docPrCounter++);
 
-            documentXml = documentXml.replace(rowXml, () => updatedRowXml);
+          // Insert image drawing run into the appendix table cell/row
+          if (
+            container.tableIndex !== undefined &&
+            container.tableIndex < tables.length &&
+            container.rowIndex !== undefined
+          ) {
+            const tableXml = tables[container.tableIndex];
+            const rows = tableXml.match(/<w:tr[\s>][\s\S]*?<\/w:tr>/g) || [];
+            if (container.rowIndex < rows.length) {
+              const rowXml = rows[container.rowIndex];
+              const cells = rowXml.match(/<w:tc[\s>][\s\S]*?<\/w:tc>/g) || [];
+              const targetCellIdx = container.cellIndex !== undefined && container.cellIndex < cells.length
+                ? container.cellIndex
+                : cells.length - 1;
 
-            appliedAppendixChanges.push({
-              appendixNumber: container.appendixNumber,
-              appendixTitle: container.appendixTitle,
-              action: "INSERTED_NEW",
-              imageRelId: newRelId,
-              imagePath: newRelPath,
-            });
+              if (targetCellIdx >= 0 && targetCellIdx < cells.length) {
+                const targetCellXml = cells[targetCellIdx];
+                const captionText = ev.caption && ev.caption !== ev.title ? ev.caption : "";
+                const captionXml = captionText
+                  ? `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="80"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="18"/><w:color w:val="595959"/></w:rPr><w:t xml:space="preserve">${escapeXml(captionText)}</w:t></w:r></w:p>`
+                  : "";
+                const newParagraphXml = `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="120"/></w:pPr><w:r>${drawingXml}</w:r></w:p>${captionXml}`;
+
+                const updatedCellXml = targetCellXml.replace(/<\/w:tc>$/, `${newParagraphXml}</w:tc>`);
+                cells[targetCellIdx] = updatedCellXml;
+
+                const newRowXml = this.reassembleRow(rowXml, cells);
+                rows[container.rowIndex] = newRowXml;
+                const newTableXml = this.reassembleTable(tableXml, rows);
+                documentXml = documentXml.replace(tableXml, () => newTableXml);
+                tables[container.tableIndex] = newTableXml;
+
+                appliedAppendixChanges.push({
+                  appendixNumber: container.appendixNumber,
+                  appendixTitle: container.appendixTitle,
+                  action: container.existingImagePath ? "PRESERVED_ORIGINAL_AND_APPENDED" : "INSERTED_NEW",
+                  imageRelId: newRelId,
+                  imagePath: newRelPath,
+                  title: ev.title,
+                });
+              }
+            }
           }
         }
       }
@@ -423,10 +453,42 @@ export class DocxEditor {
     return `${openTag}${tblPr}${tblGrid}${rows.join("")}</w:tbl>`;
   }
 
-  private generateInlineDrawingXml(rId: string, name: string): string {
-    const docPrId = Math.floor(Math.random() * 1000000) + 100;
-    // Dimensions in EMUs: 5724525 x 3800000 (~6 x 4 inches)
-    return `<w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="5724525" cy="3800000"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="${docPrId}" name="${escapeXml(name)}"/><wp:cNvGraphicFramePr/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${docPrId}" name="${escapeXml(name)}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${rId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="5724525" cy="3800000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>`;
+  /**
+   * Reads PNG dimensions (width, height) directly from the IHDR chunk.
+   */
+  private getPngDimensions(buffer: Buffer | Uint8Array): { width: number; height: number } | null {
+    if (buffer.length < 24) return null;
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+      const width = (buffer[16] << 24) | (buffer[17] << 16) | (buffer[18] << 8) | buffer[19];
+      const height = (buffer[20] << 24) | (buffer[21] << 16) | (buffer[22] << 8) | buffer[23];
+      if (width > 0 && height > 0) {
+        return { width, height };
+      }
+    }
+    return null;
+  }
+
+  private generateInlineDrawingXml(
+    rId: string,
+    name: string,
+    dimensions?: { width: number; height: number } | null,
+    docPrId: number = 100
+  ): string {
+    const maxCx = 5724525; // ~5.75 inches in EMUs
+    let cx = maxCx;
+    let cy = 3800000; // default ~4 inches
+
+    if (dimensions && dimensions.width > 0 && dimensions.height > 0) {
+      const aspectRatio = dimensions.height / dimensions.width;
+      cy = Math.round(maxCx * aspectRatio);
+      if (cy > 6858000) {
+        // Cap max height to ~7.2 inches to avoid awkward page breaks
+        cy = 6858000;
+        cx = Math.round(cy / aspectRatio);
+      }
+    }
+
+    return `<w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="${docPrId}" name="${escapeXml(name)}"/><wp:cNvGraphicFramePr/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${docPrId}" name="${escapeXml(name)}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${rId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>`;
   }
 
   private updateDocumentMetadata(

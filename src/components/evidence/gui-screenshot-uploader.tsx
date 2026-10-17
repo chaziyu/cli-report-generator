@@ -102,8 +102,26 @@ export function GuiScreenshotUploader({
   // Focus / Active state for Ctrl+V sequential paste
   const [isPasteZoneActive, setIsPasteZoneActive] = useState(false);
 
+  // Explicit task-first mapping state for upcoming uploads/pastes (Adjustment 3)
+  const [selectedTaskPreset, setSelectedTaskPreset] = useState<string>("");
+  const [selectedDevicePreset, setSelectedDevicePreset] = useState<string>(
+    devices[0]?.id || ""
+  );
+
   // Lightbox preview modal state
   const [previewImage, setPreviewImage] = useState<GuiScreenshotItem | null>(null);
+
+  // Close lightbox on Escape key
+  useEffect(() => {
+    if (!previewImage) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setPreviewImage(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [previewImage]);
 
   // File input ref
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -159,13 +177,22 @@ export function GuiScreenshotUploader({
   // Upload an image File (from paste, drag-and-drop, or file select)
   const uploadImageFile = async (
     file: File,
-    initialAppendix: string = "",
-    initialCheckId: string = ""
+    customAppendix?: string,
+    customCheckId?: string,
+    customDeviceId?: string
   ) => {
     try {
       setUploading(true);
       setError(null);
       setSuccessMsg(null);
+
+      const targetAppendix = customAppendix !== undefined ? customAppendix : selectedTaskPreset;
+      const targetCheckId = customCheckId !== undefined
+        ? customCheckId
+        : (DEFAULT_GUI_TASKS.find((t) => t.value === selectedTaskPreset)?.checkId || "");
+      const targetDeviceId = customDeviceId !== undefined
+        ? customDeviceId
+        : (selectedDevicePreset || (devices[0]?.id || ""));
 
       // Ensure session exists
       const targetSessionId = sessionId || (await onEnsureSession());
@@ -173,13 +200,15 @@ export function GuiScreenshotUploader({
       const formData = new FormData();
       formData.append("file", file);
       formData.append("type", "GUI_SCREENSHOT");
-      if (initialAppendix) {
-        formData.append("appendixMapping", initialAppendix);
+      if (targetAppendix) {
+        formData.append("appendixMapping", targetAppendix);
       }
-      if (initialCheckId) {
-        formData.append("checkId", initialCheckId);
+      if (targetCheckId) {
+        formData.append("checkId", targetCheckId);
       }
-      if (devices.length > 0) {
+      if (targetDeviceId) {
+        formData.append("deviceId", targetDeviceId);
+      } else if (devices.length > 0) {
         formData.append("deviceId", devices[0].id);
       }
 
@@ -202,8 +231,8 @@ export function GuiScreenshotUploader({
         hashSha256: uploaded.hashSha256,
         storagePath: uploaded.storagePath,
         deviceId: uploaded.deviceId,
-        checkId: uploaded.evidence?.checkId || initialCheckId || null,
-        appendixMapping: uploaded.evidence?.appendixMapping || initialAppendix,
+        checkId: uploaded.evidence?.checkId || (targetCheckId || null),
+        appendixMapping: uploaded.evidence?.appendixMapping || (targetAppendix || null),
         title: uploaded.evidence?.title || uploaded.originalFilename,
         isExcluded: false,
         previewUrl: uploaded.evidence
@@ -251,7 +280,7 @@ export function GuiScreenshotUploader({
               .replace(/\..+/, "");
             const filename = `screenshot_${timestamp}.png`;
             const file = new File([blob], filename, { type: blob.type || "image/png" });
-            await uploadImageFile(file, "");
+            await uploadImageFile(file);
           }
         }
       }
@@ -261,7 +290,7 @@ export function GuiScreenshotUploader({
         setError("No image data found on clipboard. Please copy a screenshot first.");
       }
     },
-    [isPasteZoneActive, sessionId, devices, onEnsureSession]
+    [isPasteZoneActive, sessionId, devices, selectedTaskPreset, selectedDevicePreset, onEnsureSession]
   );
 
   useEffect(() => {
@@ -295,7 +324,7 @@ export function GuiScreenshotUploader({
     }
 
     for (const f of files) {
-      await uploadImageFile(f, "");
+      await uploadImageFile(f);
     }
   };
 
@@ -303,7 +332,7 @@ export function GuiScreenshotUploader({
     if (!e.target.files) return;
     const files = Array.from(e.target.files);
     for (const f of files) {
-      await uploadImageFile(f, "");
+      await uploadImageFile(f);
     }
     e.target.value = "";
   };
@@ -425,6 +454,53 @@ export function GuiScreenshotUploader({
       </CardHeader>
 
       <CardContent className="space-y-4">
+        {/* Explicit Task-First Pre-Assignment Controls (Adjustment 3) */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-lg border border-slate-800 bg-[#0c1222] p-3 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-slate-300 font-medium text-xs">
+              Target Task for New Screenshots:
+            </span>
+            <select
+              value={selectedTaskPreset}
+              onChange={(e) => setSelectedTaskPreset(e.target.value)}
+              className="rounded border border-slate-700 bg-[#070b14] px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-purple-500 font-medium"
+            >
+              <option value="">Unassigned (Engineer will map after upload)</option>
+              <optgroup label="Default GUI Tasks">
+                {DEFAULT_GUI_TASKS.filter((t) => t.value !== "").map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Other Appendices">
+                {OTHER_APPENDIX_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+          </div>
+
+          {devices.length > 1 && (
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400 text-xs">Target Firewall:</span>
+              <select
+                value={selectedDevicePreset || devices[0]?.id}
+                onChange={(e) => setSelectedDevicePreset(e.target.value)}
+                className="rounded border border-slate-700 bg-[#070b14] px-2 py-1 text-xs text-slate-200 font-mono focus:outline-none focus:border-purple-500"
+              >
+                {devices.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.hostname} ({d.role || "Device"})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+
         {/* Interactive Paste & Drop Zone */}
         <div
           ref={pasteContainerRef}
@@ -436,7 +512,7 @@ export function GuiScreenshotUploader({
           onDrop={handleDrop}
           className={`relative border-2 border-dashed rounded-xl p-5 text-center transition-all cursor-pointer focus:outline-none ${
             isPasteZoneActive
-              ? "border-purple-500 bg-purple-500/10 shadow-lg shadow-purple-950/20"
+              ? "border-purple-500/80 bg-purple-950/20"
               : "border-slate-700/80 bg-[#0c1222] hover:border-slate-600"
           }`}
         >
@@ -558,18 +634,31 @@ export function GuiScreenshotUploader({
                       </button>
                     </div>
 
-                    {/* Task / Appendix Selector (Issue 1 & 3) */}
+                    {/* Task / Appendix Selector (Adjustment 3: visibly unassigned until mapped) */}
                     <div className="space-y-1">
-                      <label className="text-[10px] font-medium text-slate-400 uppercase tracking-wider block">
-                        Assigned PM Task:
-                      </label>
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-medium text-slate-400 uppercase tracking-wider block">
+                          Assigned PM Task:
+                        </label>
+                        {(!s.appendixMapping || !s.checkId) && (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-semibold">
+                            <AlertCircle className="h-2.5 w-2.5 text-amber-400" />
+                            Unassigned Task
+                          </span>
+                        )}
+                      </div>
                       <select
                         value={s.appendixMapping || ""}
                         onChange={(e) => handleReassignAppendix(s.id, e.target.value)}
-                        className="w-full rounded border border-slate-700 bg-[#070b14] px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-purple-500"
+                        className={`w-full rounded border px-2 py-1 text-xs focus:outline-none ${
+                          !s.appendixMapping
+                            ? "border-amber-500/60 bg-[#070b14] text-amber-300 font-medium"
+                            : "border-slate-700 bg-[#070b14] text-slate-200 focus:border-purple-500"
+                        }`}
                       >
+                        <option value="">-- Unassigned (Select PM Task) --</option>
                         <optgroup label="Default GUI Tasks">
-                          {DEFAULT_GUI_TASKS.map((opt) => (
+                          {DEFAULT_GUI_TASKS.filter((t) => t.value !== "").map((opt) => (
                             <option key={opt.value} value={opt.value}>
                               {opt.label}
                             </option>
