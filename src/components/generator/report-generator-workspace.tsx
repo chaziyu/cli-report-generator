@@ -64,6 +64,25 @@ interface StagedFile {
   type: "WORD_REPORT" | "PUTTY_LOG";
 }
 
+export interface StagedLogFile {
+  id: string;
+  file: File;
+  roleHint: "Primary" | "Secondary" | "Standalone" | "Auto";
+}
+
+export function detectRoleHint(filename: string, index: number): "Primary" | "Secondary" | "Standalone" | "Auto" {
+  const lower = filename.toLowerCase();
+  if (lower.includes("pri") || lower.includes("master") || lower.includes("active") || lower.includes("node1") || lower.includes("fw1")) {
+    return "Primary";
+  }
+  if (lower.includes("sec") || lower.includes("slave") || lower.includes("standby") || lower.includes("node2") || lower.includes("fw2")) {
+    return "Secondary";
+  }
+  if (index === 0) return "Primary";
+  if (index === 1) return "Secondary";
+  return "Auto";
+}
+
 export function ReportGeneratorWorkspace({
   initialSessions,
 }: {
@@ -80,9 +99,9 @@ export function ReportGeneratorWorkspace({
     refreshRecovery,
   } = useSessionRecovery();
 
-  // Staged files (local state before upload)
+  // Staged files (local state before upload - supporting multi-log HA workflows)
   const [stagedDocx, setStagedDocx] = useState<File | null>(null);
-  const [stagedLog, setStagedLog] = useState<File | null>(null);
+  const [stagedLogs, setStagedLogs] = useState<StagedLogFile[]>([]);
 
   // Active Session state
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -134,12 +153,44 @@ export function ReportGeneratorWorkspace({
       setHasReviewData(false);
       setPipelineResult(null);
       setStagedDocx(null);
-      setStagedLog(null);
+      setStagedLogs([]);
       setUploadError(null);
       setUploadSuccess(null);
       setPipelineError(null);
     }
   }, [recoveryData]);
+
+  const addStagedLogs = (files: File[]) => {
+    setStagedLogs((prev) => {
+      const existingKeys = new Set(prev.map((l) => `${l.file.name}-${l.file.size}`));
+      const newItems: StagedLogFile[] = [];
+      let totalCount = prev.length;
+
+      for (const f of files) {
+        const key = `${f.name}-${f.size}`;
+        if (!existingKeys.has(key)) {
+          existingKeys.add(key);
+          newItems.push({
+            id: `${f.name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            file: f,
+            roleHint: detectRoleHint(f.name, totalCount),
+          });
+          totalCount++;
+        }
+      }
+      return [...prev, ...newItems];
+    });
+  };
+
+  const removeStagedLog = (id: string) => {
+    setStagedLogs((prev) => prev.filter((l) => l.id !== id));
+  };
+
+  const updateStagedLogRole = (id: string, role: "Primary" | "Secondary" | "Standalone" | "Auto") => {
+    setStagedLogs((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, roleHint: role } : l))
+    );
+  };
 
   // File input refs
   const docxInputRef = useRef<HTMLInputElement>(null);
@@ -163,6 +214,7 @@ export function ReportGeneratorWorkspace({
     setIsDragging(false);
 
     const files = Array.from(e.dataTransfer.files);
+    const logFiles: File[] = [];
     for (const f of files) {
       if (f.name.toLowerCase().endsWith(".docx")) {
         setStagedDocx(f);
@@ -170,8 +222,11 @@ export function ReportGeneratorWorkspace({
         f.name.toLowerCase().endsWith(".txt") ||
         f.name.toLowerCase().endsWith(".log")
       ) {
-        setStagedLog(f);
+        logFiles.push(f);
       }
+    }
+    if (logFiles.length > 0) {
+      addStagedLogs(logFiles);
     }
   };
 
@@ -182,9 +237,10 @@ export function ReportGeneratorWorkspace({
   };
 
   const handleLogChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setStagedLog(e.target.files[0]);
+    if (e.target.files && e.target.files.length > 0) {
+      addStagedLogs(Array.from(e.target.files));
     }
+    e.target.value = "";
   };
 
   // Ensure session exists or create it on demand
@@ -213,9 +269,9 @@ export function ReportGeneratorWorkspace({
     return newId;
   };
 
-  // Upload staged files and extract metadata automatically
+  // Upload staged files and extract metadata automatically (supporting multi-log HA pairs)
   const handleUploadAndInspect = async () => {
-    if (!stagedDocx && !stagedLog) {
+    if (!stagedDocx && stagedLogs.length === 0) {
       setUploadError("Please select at least one Word report (.docx) or PuTTY log (.txt).");
       return;
     }
@@ -257,11 +313,12 @@ export function ReportGeneratorWorkspace({
         }
       }
 
-      // 3. Upload PuTTY log if staged
-      let detectedPromptHost: string | null = null;
-      if (stagedLog) {
+      // 3. Upload and parse all staged PuTTY logs (Primary + Secondary HA workflow)
+      const detectedHosts: Array<{ hostname: string; role: string }> = [];
+
+      for (const logItem of stagedLogs) {
         const logFormData = new FormData();
-        logFormData.append("file", stagedLog);
+        logFormData.append("file", logItem.file);
         logFormData.append("type", "PUTTY_LOG");
 
         const uploadLogRes = await fetch(`/api/sessions/${currentSessionId}/files`, {
@@ -271,7 +328,7 @@ export function ReportGeneratorWorkspace({
 
         const uploadLogData = await uploadLogRes.json();
         if (!uploadLogRes.ok || !uploadLogData.success) {
-          throw new Error(uploadLogData.error || "Failed to upload PuTTY log");
+          throw new Error(uploadLogData.error || `Failed to upload PuTTY log "${logItem.file.name}"`);
         }
 
         // Parse log to detect prompt hostname
@@ -283,15 +340,45 @@ export function ReportGeneratorWorkspace({
 
         const parseData = await parseRes.json();
         if (parseRes.ok && parseData.success) {
-          detectedPromptHost = parseData.data.segmentedLog?.detectedHostname || null;
+          const detectedPromptHost = parseData.data.segmentedLog?.detectedHostname || null;
+          if (detectedPromptHost) {
+            detectedHosts.push({
+              hostname: detectedPromptHost,
+              role:
+                logItem.roleHint !== "Auto"
+                  ? logItem.roleHint
+                  : detectedHosts.length === 0
+                  ? "Primary"
+                  : "Secondary",
+            });
+          }
         }
       }
 
       // 4. Reconcile metadata
+      const currentMetadata = docxInspectionData?.metadata || null;
       const reconciled = metadataReconciler.reconcile(
-        docxInspectionData?.metadata || null,
-        detectedPromptHost
+        currentMetadata,
+        detectedHosts.length > 0 ? detectedHosts[0].hostname : null
       );
+
+      // If multiple distinct hosts detected, include secondary devices
+      if (detectedHosts.length > 1) {
+        for (let i = 1; i < detectedHosts.length; i++) {
+          const h = detectedHosts[i];
+          const exists = reconciled.devices.some(
+            (d) => d.hostname.toLowerCase() === h.hostname.toLowerCase()
+          );
+          if (!exists) {
+            reconciled.devices.push({
+              hostname: h.hostname,
+              model: reconciled.model || undefined,
+              role: h.role,
+              source: "CLI",
+            });
+          }
+        }
+      }
 
       setMetadata(reconciled);
       if (reconciled.customer) setEditCustomer(reconciled.customer);
@@ -307,7 +394,30 @@ export function ReportGeneratorWorkspace({
         });
       }
 
-      // Refresh session devices from backend if newly registered
+      // Register newly discovered devices with backend
+      for (const dev of reconciled.devices) {
+        const alreadyRegistered = sessionDevices.some(
+          (d) => d.hostname.toLowerCase() === dev.hostname.toLowerCase()
+        );
+        if (!alreadyRegistered) {
+          try {
+            await fetch(`/api/sessions/${currentSessionId}/devices`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                hostname: dev.hostname,
+                model: dev.model || undefined,
+                serialNumber: dev.serialNumber || undefined,
+                role: dev.role,
+              }),
+            });
+          } catch {
+            // ignore duplicate
+          }
+        }
+      }
+
+      // Refresh session devices from backend
       try {
         const sessionRes = await fetch(`/api/sessions/${currentSessionId}`);
         const sessionData = await sessionRes.json();
@@ -318,7 +428,11 @@ export function ReportGeneratorWorkspace({
         // Non-blocking fallback
       }
 
-      setUploadSuccess("Files uploaded and verified. Metadata extracted successfully.");
+      const logMsg =
+        stagedLogs.length > 0
+          ? ` (${stagedLogs.length} PuTTY log${stagedLogs.length !== 1 ? "s" : ""})`
+          : "";
+      setUploadSuccess(`Files uploaded and verified${logMsg}. Metadata extracted successfully.`);
       await refreshRecovery();
     } catch (err: unknown) {
       setUploadError(err instanceof Error ? err.message : "Error processing uploaded files");
@@ -354,19 +468,21 @@ export function ReportGeneratorWorkspace({
         setStagedDocx(null);
       }
 
-      if (stagedLog) {
-        const logFormData = new FormData();
-        logFormData.append("file", stagedLog);
-        logFormData.append("type", "PUTTY_LOG");
-        const logRes = await fetch(`/api/sessions/${currentSessionId}/files`, {
-          method: "POST",
-          body: logFormData,
-        });
-        const logData = await logRes.json();
-        if (!logRes.ok || !logData.success) {
-          throw new Error(logData.error || "Failed to upload PuTTY log");
+      if (stagedLogs.length > 0) {
+        for (const logItem of stagedLogs) {
+          const logFormData = new FormData();
+          logFormData.append("file", logItem.file);
+          logFormData.append("type", "PUTTY_LOG");
+          const logRes = await fetch(`/api/sessions/${currentSessionId}/files`, {
+            method: "POST",
+            body: logFormData,
+          });
+          const logData = await logRes.json();
+          if (!logRes.ok || !logData.success) {
+            throw new Error(logData.error || `Failed to upload PuTTY log "${logItem.file.name}"`);
+          }
         }
-        setStagedLog(null);
+        setStagedLogs([]);
       }
 
       // 3. Trigger automated processing pipeline
@@ -593,6 +709,7 @@ export function ReportGeneratorWorkspace({
                 ref={logInputRef}
                 type="file"
                 accept=".txt,.log"
+                multiple
                 onChange={handleLogChange}
                 className="hidden"
               />
@@ -604,15 +721,24 @@ export function ReportGeneratorWorkspace({
                 className="gap-2 border-slate-700 bg-slate-800 text-slate-200 hover:text-white hover:bg-slate-700"
               >
                 <Terminal className="h-4 w-4 text-emerald-400" />
-                <span>Select PuTTY Log (.txt)</span>
+                <span>Select PuTTY Log(s) (.txt)</span>
               </Button>
             </div>
           </div>
 
           {/* Staged Files Preview */}
-          {(stagedDocx || stagedLog) && (
+          {(stagedDocx || stagedLogs.length > 0) && (
             <div className="space-y-2 pt-2">
-              <h4 className="text-xs font-semibold text-slate-300">Staged Files for Processing:</h4>
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-semibold text-slate-300">
+                  Staged Files for Processing ({Boolean(stagedDocx) ? 1 : 0} Word doc, {stagedLogs.length} PuTTY log{stagedLogs.length !== 1 ? "s" : ""}):
+                </h4>
+                {stagedLogs.length > 1 && (
+                  <Badge variant="outline" className="border-indigo-500/30 text-indigo-300 bg-indigo-950/40 text-[10px]">
+                    HA Multi-Log Workflow
+                  </Badge>
+                )}
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {stagedDocx && (
                   <div className="flex items-center justify-between p-3 rounded-lg border border-slate-800 bg-[#0c1222]">
@@ -627,30 +753,66 @@ export function ReportGeneratorWorkspace({
                       type="button"
                       onClick={() => setStagedDocx(null)}
                       className="text-slate-500 hover:text-rose-400 p-1"
+                      title="Remove Word report"
                     >
                       <X className="h-4 w-4" />
                     </button>
                   </div>
                 )}
 
-                {stagedLog && (
-                  <div className="flex items-center justify-between p-3 rounded-lg border border-slate-800 bg-[#0c1222]">
+                {stagedLogs.map((logItem) => (
+                  <div
+                    key={logItem.id}
+                    className="flex items-center justify-between p-3 rounded-lg border border-slate-800 bg-[#0c1222]"
+                  >
                     <div className="flex items-center gap-2.5 overflow-hidden">
                       <Terminal className="h-4 w-4 text-emerald-400 shrink-0" />
                       <div className="truncate">
-                        <p className="text-xs font-medium text-white truncate">{stagedLog.name}</p>
-                        <p className="text-[11px] text-slate-400">{formatBytes(stagedLog.size)} · PuTTY Session Log</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-xs font-medium text-white truncate">{logItem.file.name}</p>
+                          <span
+                            className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-medium ${
+                              logItem.roleHint === "Primary"
+                                ? "bg-blue-950/80 text-blue-300 border border-blue-500/40"
+                                : logItem.roleHint === "Secondary"
+                                ? "bg-purple-950/80 text-purple-300 border border-purple-500/40"
+                                : "bg-slate-800 text-slate-300"
+                            }`}
+                          >
+                            {logItem.roleHint}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400">{formatBytes(logItem.file.size)} · PuTTY Session Log</p>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setStagedLog(null)}
-                      className="text-slate-500 hover:text-rose-400 p-1"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <select
+                        value={logItem.roleHint}
+                        onChange={(e) =>
+                          updateStagedLogRole(
+                            logItem.id,
+                            e.target.value as "Primary" | "Secondary" | "Standalone" | "Auto"
+                          )
+                        }
+                        className="text-[10px] bg-slate-900 border border-slate-700 text-slate-200 rounded px-1.5 py-1 focus:outline-none focus:border-blue-500 cursor-pointer"
+                        title="Set firewall role hint"
+                      >
+                        <option value="Primary">Primary</option>
+                        <option value="Secondary">Secondary</option>
+                        <option value="Standalone">Standalone</option>
+                        <option value="Auto">Auto</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => removeStagedLog(logItem.id)}
+                        className="text-slate-500 hover:text-rose-400 p-1"
+                        title="Remove staged log"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
-                )}
+                ))}
               </div>
 
               <div className="flex items-center justify-end pt-2">
@@ -889,7 +1051,7 @@ export function ReportGeneratorWorkspace({
               <Button
                 size="lg"
                 onClick={handleGenerateReport}
-                disabled={isProcessing || (!stagedDocx && !stagedLog && !sessionId)}
+                disabled={isProcessing || (!stagedDocx && stagedLogs.length === 0 && !sessionId)}
                 className="gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm px-6 h-11 transition-colors cursor-pointer"
               >
                 {isProcessing ? (

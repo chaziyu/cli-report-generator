@@ -237,10 +237,10 @@ describe("Word Report Editor & Exporter API Integration (Phase 9)", () => {
     expect(dbReport?.version).toBe(1);
     expect(dbReport?.originalReportId).toBe(docxRecord.id);
 
-    // Verify session status updated to COMPLETED
+    // Verify session status is NOT marked COMPLETED when review is incomplete (concern 6)
     const updatedSession = await prisma.pMSession.findUnique({
       where: { id: sessionId },
     });
-    expect(updatedSession?.status).toBe("COMPLETED");
+    expect(updatedSession?.status).toBe("REVIEW");
   });
 });

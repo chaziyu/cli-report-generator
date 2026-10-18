@@ -67,6 +67,20 @@ export async function POST(request: NextRequest, context: RouteContext) {
       );
     }
 
+    // Validate deviceId ownership on upload if deviceId is provided
+    if (deviceId !== null && deviceId !== undefined && deviceId.trim().length > 0) {
+      const dev = await prisma.device.findUnique({
+        where: { id: deviceId },
+        select: { sessionId: true },
+      });
+      if (!dev || dev.sessionId !== sessionId) {
+        return NextResponse.json(
+          { success: false, error: "Target device does not belong to this session" },
+          { status: 400 }
+        );
+      }
+    }
+
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
@@ -131,6 +145,16 @@ export async function POST(request: NextRequest, context: RouteContext) {
           isRedacted: false,
         },
       });
+
+      // Issue 2: Recalculate affected finding and invalidate stale approvals on new GUI evidence upload
+      if (evidenceRecord.deviceId && evidenceRecord.checkId && !evidenceRecord.isExcluded) {
+        await reviewService.recalculateFindingEvidenceState(
+          sessionId,
+          evidenceRecord.deviceId,
+          evidenceRecord.checkId,
+          "New GUI screenshot uploaded and mapped to finding."
+        );
+      }
     }
 
     return NextResponse.json(
@@ -347,7 +371,17 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
       );
     }
 
-    // Remove from report: Mark as excluded (isExcluded: true) so it stays excluded across refreshes and exports
+    // 1. Identify active evidence records associated with this file before exclusion
+    const affectedEvidences = await prisma.evidence.findMany({
+      where: {
+        OR: [
+          { uploadedFileId: fileId },
+          { imageReference: file.storagePath },
+        ],
+      },
+    });
+
+    // 2. Remove from report: Mark as excluded (isExcluded: true) so it stays excluded across refreshes and exports
     await prisma.evidence.updateMany({
       where: {
         OR: [
@@ -359,6 +393,18 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
         isExcluded: true,
       },
     });
+
+    // 3. Issue 2: Invalidate affected review approvals and recalculate evidence state
+    for (const ev of affectedEvidences) {
+      if (ev.deviceId && ev.checkId && !ev.isExcluded) {
+        await reviewService.recalculateFindingEvidenceState(
+          sessionId,
+          ev.deviceId,
+          ev.checkId,
+          "Evidence excluded from report via file removal."
+        );
+      }
+    }
 
     return NextResponse.json({
       success: true,

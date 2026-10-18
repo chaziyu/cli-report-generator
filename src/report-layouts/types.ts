@@ -57,6 +57,10 @@ export interface ProtectedSection {
   startParagraphIndex?: number;
   endParagraphIndex?: number;
   reason: string;
+  contentHash?: string;
+  normalizedText?: string;
+  rowCount?: number;
+  cellCount?: number;
 }
 
 export interface DeviceSectionTarget {

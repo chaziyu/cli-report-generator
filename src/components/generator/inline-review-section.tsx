@@ -185,6 +185,18 @@ export function InlineReviewSection({
 
   // 1-Click Approve finding
   const handleApprove = (item: ReviewCheckItem) => {
+    const normEval = reviewService.normalizeStatus(item.proposedEvaluation.status);
+    if ((normEval === "FAIL" || normEval === "WARNING" || item.requiresJustification) && !item.decision.reviewNotes) {
+      setJustificationTarget({
+        item,
+        targetStatus:
+          item.proposedEvaluation.status !== "PENDING"
+            ? item.proposedEvaluation.status
+            : item.originalDocument.status || "PASS",
+      });
+      return;
+    }
+
     handleRecordDecision(
       item.checkId,
       "APPROVED",
@@ -197,6 +209,17 @@ export function InlineReviewSection({
 
   // Status override
   const handleOverrideStatus = (item: ReviewCheckItem, newStatus: string) => {
+    const normEval = reviewService.normalizeStatus(item.proposedEvaluation.status);
+    const normTarget = reviewService.normalizeStatus(newStatus);
+    const isOverridingFailWarnToPass = (normEval === "FAIL" || normEval === "WARNING") && normTarget === "PASS";
+    const isOverridingToNa = normTarget === "NA" && normEval !== "NA";
+    const isFailWarnRequiresJustification = (normEval === "FAIL" || normEval === "WARNING") && !item.decision.reviewNotes;
+
+    if (isOverridingFailWarnToPass || isOverridingToNa || isFailWarnRequiresJustification) {
+      setJustificationTarget({ item, targetStatus: newStatus });
+      return;
+    }
+
     handleRecordDecision(
       item.checkId,
       "MODIFIED",

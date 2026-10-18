@@ -311,10 +311,11 @@ export class DocxEditor {
       compressionOptions: { level: 6 },
     });
 
-    // 12. Run post-generation validation
+    // 12. Run post-generation validation against original document buffer
     const validation = await docxValidator.validateModifiedDocument(
       modifiedBuffer,
-      inspection
+      inspection,
+      originalDocxBuffer
     );
 
     const changeSummary: ReportChangeSummary = {

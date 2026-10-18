@@ -153,14 +153,27 @@ export class ReviewService {
       };
     }
 
-    // Rule: Warnings or Failures approved without justification
+    // Rule: Warnings or Failures approved or modified to PASS without justification
     const normEvalStatus = this.normalizeStatus(evaluation.status);
-    if ((normEvalStatus === "FAIL" || normEvalStatus === "WARNING") && !hasNotes && input.decision === "APPROVED") {
-      return {
-        isValid: false,
-        error: `Approval for "${checkDef.taskName}" requires an engineer justification because the check evaluated to ${normEvalStatus}.`,
-        isException: true,
-      };
+    const normTargetStatus = this.normalizeStatus(input.finalStatus || evaluation.status);
+
+    if (normEvalStatus === "FAIL" || normEvalStatus === "WARNING") {
+      if (!hasNotes) {
+        if (normTargetStatus === "PASS" || input.decision === "MODIFIED") {
+          return {
+            isValid: false,
+            error: `Overriding "${checkDef.taskName}" from ${normEvalStatus} to PASS requires an explicit engineer justification.`,
+            isException: true,
+          };
+        }
+        if (input.decision === "APPROVED") {
+          return {
+            isValid: false,
+            error: `Approval for "${checkDef.taskName}" requires an engineer justification because the check evaluated to ${normEvalStatus}.`,
+            isException: true,
+          };
+        }
+      }
     }
 
     // Rule: Overriding to NA without justification
@@ -185,7 +198,7 @@ export class ReviewService {
    * - Superseded or pending decisions are never eligible.
    * - If re-review is required (e.g. evidence changed and fresh approval has not yet been given), ineligible.
    * - If the finding has an evidenceFingerprint, the decision's evidenceFingerprint
-   *   must match the current finding's fingerprint.
+   *   must match the current finding's fingerprint. A missing decision fingerprint must not qualify.
    * - Once a fresh approval is recorded for a changed finding, it becomes eligible!
    */
   isDecisionEligibleForExport(
@@ -204,9 +217,10 @@ export class ReviewService {
     if (reviewRequired) {
       return false;
     }
-    // If the finding has a fingerprint, the decision must match that exact fingerprint
-    if (findingFingerprint && decision.evidenceFingerprint) {
-      if (decision.evidenceFingerprint !== findingFingerprint) {
+    // If the finding has a fingerprint, the decision must match that exact fingerprint.
+    // A missing decision fingerprint must not qualify.
+    if (findingFingerprint && findingFingerprint.trim().length > 0) {
+      if (!decision.evidenceFingerprint || decision.evidenceFingerprint !== findingFingerprint) {
         return false;
       }
     }
@@ -757,15 +771,18 @@ export class ReviewService {
       .digest("hex");
 
     // 5. Invalidate prior approved/modified decisions if fingerprint changed
-    const priorApprovedDecision = result.reviewDecisions.find(
+    const priorApprovedDecisions = result.reviewDecisions.filter(
       (d) => d.decision === "APPROVED" || d.decision === "MODIFIED"
     );
 
     let reReviewTriggered = false;
 
-    if (priorApprovedDecision && result.evidenceFingerprint !== newFingerprint) {
-      await prisma.reviewDecision.update({
-        where: { id: priorApprovedDecision.id },
+    if (priorApprovedDecisions.length > 0 && result.evidenceFingerprint !== newFingerprint) {
+      await prisma.reviewDecision.updateMany({
+        where: {
+          checklistResultId: result.id,
+          decision: { in: ["APPROVED", "MODIFIED"] },
+        },
         data: { decision: "SUPERSEDED" },
       });
 

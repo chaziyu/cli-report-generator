@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import {
   ReportLayoutDefinition,
   DocumentMetadata,
@@ -265,26 +266,45 @@ export class CtcFortiGateLayoutV1_1 implements ReportLayoutDefinition {
   identifyProtectedSections(tables: string[]): ProtectedSection[] {
     const protectedSections: ProtectedSection[] = [];
 
+    // Helper to extract clean text from table XML
+    const getNormText = (tableXml: string) =>
+      stripXml(tableXml).replace(/\s+/g, " ").trim();
+
     // Table 0 is Author's Details and Signatures
     if (tables.length > 0) {
+      const normText = getNormText(tables[0]);
+      const rows = tables[0].match(/<w:tr[\s>]/g) || [];
+      const cells = tables[0].match(/<w:tc[\s>]/g) || [];
+
       protectedSections.push({
         name: "Author Details & Technical Sign-Off",
         type: "TABLE",
         tableIndex: 0,
         reason:
           "Preserves official engineer credentials, QMS audit sign-offs, and company metadata.",
+        contentHash: createHash("sha256").update(normText).digest("hex"),
+        normalizedText: normText,
+        rowCount: rows.length,
+        cellCount: cells.length,
       });
     }
 
     // Table 1 is Customer Satisfaction Survey
     if (tables.length > 1) {
-      const t1Text = stripXml(tables[1]);
+      const t1Text = getNormText(tables[1]);
       if (t1Text.toLowerCase().includes("survey") || t1Text.toLowerCase().includes("satisfied")) {
+        const rows = tables[1].match(/<w:tr[\s>]/g) || [];
+        const cells = tables[1].match(/<w:tc[\s>]/g) || [];
+
         protectedSections.push({
           name: "Customer Satisfaction Survey",
           type: "TABLE",
           tableIndex: 1,
           reason: "Customer evaluation form must remain untouched.",
+          contentHash: createHash("sha256").update(t1Text).digest("hex"),
+          normalizedText: t1Text,
+          rowCount: rows.length,
+          cellCount: cells.length,
         });
       }
     }

@@ -1,4 +1,5 @@
 import JSZip from "jszip";
+import { createHash } from "crypto";
 import { DocumentInspectionResult, ProtectedSection } from "@/report-layouts/types";
 
 export interface DocxValidationResult {
@@ -24,7 +25,8 @@ export class DocxValidator {
    */
   async validateModifiedDocument(
     modifiedBuffer: Buffer | Uint8Array,
-    originalInspection?: DocumentInspectionResult
+    originalInspection?: DocumentInspectionResult,
+    originalDocxBuffer?: Buffer | Uint8Array
   ): Promise<DocxValidationResult> {
     const errors: string[] = [];
     const warnings: string[] = [];
@@ -162,19 +164,92 @@ export class DocxValidator {
       if (originalInspection.protectedSections.length > 0) {
         let protectedViolated = false;
 
+        // Parse original document tables if original buffer was provided
+        let origTables: string[] = [];
+        if (originalDocxBuffer) {
+          try {
+            const origZip = await JSZip.loadAsync(originalDocxBuffer);
+            const origDocXml = await origZip.file("word/document.xml")?.async("string");
+            if (origDocXml) {
+              origTables = origDocXml.match(/<w:tbl[\s>][\s\S]*?<\/w:tbl>/g) || [];
+            }
+          } catch {
+            // ignore load failure
+          }
+        }
+
         for (const sec of originalInspection.protectedSections) {
           if (sec.type === "TABLE" && sec.tableIndex !== undefined) {
             if (sec.tableIndex >= tables.length) {
               errors.push(`Protected section '${sec.name}' at table index ${sec.tableIndex} is missing in generated document.`);
               protectedViolated = true;
             } else {
-              const tableText = tables[sec.tableIndex].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+              const tableXml = tables[sec.tableIndex];
+              const tableText = tableXml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+              const modHash = createHash("sha256").update(tableText).digest("hex");
+              const modRows = (tableXml.match(/<w:tr[\s>]/g) || []).length;
+              const modCells = (tableXml.match(/<w:tc[\s>]/g) || []).length;
+
+              // 1. Direct deep comparison against original document tables if original buffer provided
+              if (origTables.length > sec.tableIndex) {
+                const origTableXml = origTables[sec.tableIndex];
+                const origText = origTableXml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+                const origRows = (origTableXml.match(/<w:tr[\s>]/g) || []).length;
+                const origCells = (origTableXml.match(/<w:tc[\s>]/g) || []).length;
+
+                if (origText !== tableText) {
+                  errors.push(
+                    `Protected section '${sec.name}' at table index ${sec.tableIndex} was altered or corrupted compared to original document.`
+                  );
+                  protectedViolated = true;
+                } else if (origRows !== modRows || origCells !== modCells) {
+                  errors.push(
+                    `Protected section '${sec.name}' at table index ${sec.tableIndex} row/cell structure was altered.`
+                  );
+                  protectedViolated = true;
+                }
+              } else if (sec.contentHash) {
+                // 2. Hash and structural comparison against metadata recorded during original inspection
+                if (modHash !== sec.contentHash) {
+                  errors.push(
+                    `Protected section '${sec.name}' at table index ${sec.tableIndex} content hash mismatch against original template.`
+                  );
+                  protectedViolated = true;
+                } else if (
+                  (sec.rowCount !== undefined && modRows !== sec.rowCount) ||
+                  (sec.cellCount !== undefined && modCells !== sec.cellCount)
+                ) {
+                  errors.push(
+                    `Protected section '${sec.name}' at table index ${sec.tableIndex} structural layout was modified.`
+                  );
+                  protectedViolated = true;
+                }
+              } else if (sec.normalizedText) {
+                // 3. Normalized text comparison
+                if (tableText !== sec.normalizedText) {
+                  errors.push(
+                    `Protected section '${sec.name}' at table index ${sec.tableIndex} text was altered compared to original document.`
+                  );
+                  protectedViolated = true;
+                }
+              }
+
+              // 4. Semantic integrity assertions
               if (
                 sec.name.toLowerCase().includes("author") &&
                 !tableText.toLowerCase().includes("name") &&
                 !tableText.toLowerCase().includes("designation")
               ) {
                 errors.push(`Protected author details and sign-off section appears corrupted or altered.`);
+                protectedViolated = true;
+              }
+
+              if (
+                sec.name.toLowerCase().includes("survey") &&
+                !tableText.toLowerCase().includes("survey") &&
+                !tableText.toLowerCase().includes("satisfied")
+              ) {
+                errors.push(`Protected customer satisfaction survey section appears corrupted or altered.`);
                 protectedViolated = true;
               }
             }
@@ -187,7 +262,7 @@ export class DocxValidator {
       }
 
       // 7. Verify appendix headings preserved
-      if (originalInspection.appendixContainers.length > 0) {
+      if (originalInspection.appendixContainers && originalInspection.appendixContainers.length > 0) {
         let missingHeadings = 0;
         for (const app of originalInspection.appendixContainers) {
           const appPattern = new RegExp(`Appendix\\s*${app.appendixNumber}\\b`, "i");

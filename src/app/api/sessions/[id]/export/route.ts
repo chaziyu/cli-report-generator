@@ -62,14 +62,31 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
       }
     }
 
-    // 2. Fetch all active and excluded evidence
-    const allEvidence = await prisma.evidence.findMany({
+    // 2. Fetch all active and excluded evidence with strict session boundaries
+    const rawAllEvidence = await prisma.evidence.findMany({
       where: {
         OR: [
           { deviceId: { in: session.devices.map((d) => d.id) } },
           { uploadedFile: { sessionId } },
         ],
       },
+      include: {
+        uploadedFile: true,
+        commandExecution: {
+          include: {
+            device: true,
+          },
+        },
+      },
+    });
+
+    // Authoritative session boundary filter: prevent cross-session evidence associations
+    const sessionDeviceIds = new Set(session.devices.map((d) => d.id));
+    const allEvidence = rawAllEvidence.filter((e) => {
+      if (e.uploadedFile && e.uploadedFile.sessionId !== sessionId) return false;
+      if (e.commandExecution?.device && e.commandExecution.device.sessionId !== sessionId) return false;
+      if (e.deviceId && !sessionDeviceIds.has(e.deviceId)) return false;
+      return true;
     });
 
     const activeEvidenceCount = allEvidence.filter((e) => !e.isExcluded).length;
@@ -325,7 +342,11 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
         isExcluded: false,
       },
       include: {
-        commandExecution: true,
+        commandExecution: {
+          include: {
+            device: true,
+          },
+        },
         uploadedFile: true,
       },
       orderBy: [{ appendixMapping: "asc" }, { pageNumber: "asc" }],
@@ -340,6 +361,40 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
 
     for (const ev of activeEvidences) {
       try {
+        // Authoritative device & session boundary verification (Issue 1)
+        if (ev.deviceId !== targetDevice.id) {
+          omittedUnapprovedEvidence.push({
+            id: ev.id,
+            title: ev.title,
+            checkIds: [],
+            reason: "DEVICE_OWNERSHIP_MISMATCH",
+          });
+          continue;
+        }
+
+        if (ev.uploadedFile && ev.uploadedFile.sessionId !== sessionId) {
+          omittedUnapprovedEvidence.push({
+            id: ev.id,
+            title: ev.title,
+            checkIds: [],
+            reason: "CROSS_SESSION_FILE_ASSOCIATION",
+          });
+          continue;
+        }
+
+        if (
+          ev.commandExecution?.device &&
+          (ev.commandExecution.device.sessionId !== sessionId ||
+            ev.commandExecution.deviceId !== targetDevice.id)
+        ) {
+          omittedUnapprovedEvidence.push({
+            id: ev.id,
+            title: ev.title,
+            checkIds: [],
+            reason: "CROSS_SESSION_COMMAND_ASSOCIATION",
+          });
+          continue;
+        }
         // Map matching checkIds using stable checkId first
         let matchingCheckIds: string[] = [];
         let appendixNumber: number | undefined;
@@ -427,7 +482,7 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
       }
     }
 
-    // 7. Input-signature deduplication engine (Correction 3)
+    // 7. Input-signature deduplication engine (Correction 3 & Issue 5)
     const signaturePayload = {
       sourceDocHash: inspection.sha256Hash,
       deviceId: targetDevice.id,
@@ -436,6 +491,12 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
         model: targetDevice.model,
         serialNumber: targetDevice.serialNumber,
         role: targetDevice.role,
+        engineerName: session.engineerName || "",
+      },
+      reportMetadata: {
+        customer: session.customer,
+        engineerName: session.engineerName || "",
+        pmDate: session.pmDate ? new Date(session.pmDate).toISOString() : "",
       },
       approvedFindingRevisions: decisionsToApply
         .map((d) => ({
@@ -443,14 +504,20 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
           finalStatus: d.finalStatus,
           finalRemarks: d.finalRemarks,
           reviewer: d.reviewer,
+          reviewNotes: d.reviewNotes || "",
         }))
         .sort((a, b) => a.checkId.localeCompare(b.checkId)),
       evidenceHashes: evidencesToInsert
         .map((e) => ({
           id: e.id,
           title: e.title,
-          checkIds: e.checkIds.sort(),
+          caption: e.caption || "",
+          contentHash: createHash("sha256").update(e.imageBuffer).digest("hex"),
+          checkIds: e.checkIds.slice().sort(),
           appendixNumber: e.appendixNumber,
+          pageNumber: e.pageNumber,
+          totalPages: e.totalPages,
+          sourceLabel: e.sourceLabel,
           replaceExistingMedia: Boolean(e.replaceExistingMedia),
         }))
         .sort((a, b) => (a.id || "").localeCompare(b.id || "")),
@@ -566,12 +633,47 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
       },
     });
 
-    // 11. Update session status to COMPLETED if all checks approved
-    if (session.status !== "COMPLETED") {
-      await prisma.pMSession.update({
-        where: { id: session.id },
-        data: { status: "COMPLETED" },
+    // 11. Update session status to COMPLETED ONLY if all checks approved across all devices in session (Issue 6)
+    const allSessionChecks = await prisma.checklistResult.findMany({
+      where: {
+        device: { sessionId: session.id },
+      },
+      include: {
+        reviewDecisions: {
+          orderBy: { decidedAt: "desc" },
+          take: 1,
+        },
+      },
+    });
+
+    const isFullyApproved =
+      allSessionChecks.length > 0 &&
+      allSessionChecks.every((check) => {
+        const latest = check.reviewDecisions[0];
+        return (
+          latest &&
+          reviewService.isDecisionEligibleForExport(
+            check.evidenceFingerprint,
+            latest,
+            check.reviewRequired
+          )
+        );
       });
+
+    if (isFullyApproved) {
+      if (session.status !== "COMPLETED") {
+        await prisma.pMSession.update({
+          where: { id: session.id },
+          data: { status: "COMPLETED" },
+        });
+      }
+    } else {
+      if (session.status === "COMPLETED") {
+        await prisma.pMSession.update({
+          where: { id: session.id },
+          data: { status: "REVIEW" },
+        });
+      }
     }
 
     return NextResponse.json({
