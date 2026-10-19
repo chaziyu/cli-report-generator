@@ -13,28 +13,11 @@ import {
   ConnectivityMetrics,
   LogManagerMetrics,
 } from "@/core/checks/types";
-import { CheckStatus, CollectionState } from "@/vendors/types";
+import { VendorRuleFinding, VendorRuleHandler } from "@/vendors/types";
 
-export interface EvaluatedFinding {
-  ruleId: string;
-  collectionState: CollectionState;
-  evaluationStatus: CheckStatus;
-  currentValue: string;
-  expectedValue: string;
-  remarks: string;
-  reviewRequired: boolean;
-}
+export type EvaluatedFinding = VendorRuleFinding;
 
-export type FortiGateRuleHandler = (
-  metrics: ExtractedMetricsValue | undefined,
-  context?: {
-    hasExecution: boolean;
-    rawOutput?: string;
-    executions?: any[];
-    allOutputs?: string[];
-    allMetrics?: ExtractedMetricsValue[];
-  }
-) => EvaluatedFinding;
+export type FortiGateRuleHandler = VendorRuleHandler;
 
 /**
  * FortiGate PM Deterministic Evaluation Rules.

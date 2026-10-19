@@ -255,15 +255,18 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
     const skippedItems: string[] = [];
 
     const checkHasEvidence = (
-      def: { id: string; targetAppendix?: string | null },
+      def: { id: string; targetAppendix?: string | null; evidenceRequired?: boolean; sourceType?: string },
       evs: Array<{ checkId?: string | null; appendixMapping?: string | null; isExcluded?: boolean }> = []
     ): boolean => {
+      const requiresEvidence = Boolean(def.evidenceRequired || def.targetAppendix || def.sourceType === "CLI");
+      if (!requiresEvidence) return true;
+
       // 1. Check direct stable checkId match
       if (evs.some((e) => !e.isExcluded && e.checkId === def.id)) {
         return true;
       }
       // 2. Appendix mapping fallback
-      if (!def.targetAppendix) return true;
+      if (!def.targetAppendix) return false;
       const cleanTarget = def.targetAppendix.toLowerCase().replace(/[^a-z0-9]/g, "");
       return evs.some((e) => {
         if (e.isExcluded || !e.appendixMapping) return false;
@@ -277,8 +280,9 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
         const result = resultByCheckId.get(def.id);
         const evalStatus = reviewService.normalizeStatus(result?.status || "PENDING");
         const hasEv = checkHasEvidence(def, evidences);
+        const requiresEvidence = Boolean(def.evidenceRequired || def.targetAppendix || def.sourceType === "CLI");
 
-        const isEvidenceMissing = Boolean(def.targetAppendix) && (!hasEv || result?.collectionState === "MISSING");
+        const isEvidenceMissing = requiresEvidence && (!hasEv || result?.collectionState === "MISSING");
         const isWarningOrFail = evalStatus === "FAIL" || evalStatus === "WARNING";
 
         // In APPROVE_PASSING mode: only approve clean checks that passed and have required evidence
@@ -287,7 +291,7 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
             sourceType: def.sourceType,
             status: result?.status || "PENDING",
             collectionState: result?.collectionState || "MISSING",
-            requiresEvidence: Boolean(def.targetAppendix),
+            requiresEvidence,
             hasEvidence: hasEv,
             reviewRequired: result?.reviewRequired,
           });

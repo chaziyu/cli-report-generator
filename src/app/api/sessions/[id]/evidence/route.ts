@@ -187,7 +187,10 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
 
         const title = cmdDef?.description || cmdDef?.command || exec.command;
         const appendixMapping =
-          cmdDef?.targetAppendix || "Appendix - Terminal Evidence";
+          cmdDef?.targetAppendix || (cmdDef?.guideSource ? "Terminal evidence" : "Appendix - Terminal Evidence");
+        const checkIds = cmdDef?.guideSource
+          ? Array.from(new Set(cmdDef.mappedCheckIds || []))
+          : cmdDef?.mappedCheckIds?.slice(0, 1) || [];
 
         // Render terminal pages
         const pages = await evidenceRenderer.renderEvidencePages({
@@ -214,23 +217,24 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
             "image/png"
           );
 
-          const evidenceRow = await prisma.evidence.create({
-            data: {
-              commandExecutionId: exec.id,
-              deviceId: device.id,
-              checkId: cmdDef?.mappedCheckIds?.[0] || null,
-              title,
-              appendixMapping,
-              imageReference: stored.storagePath,
-              caption: `${appendixMapping}: ${title} (${device.hostname}) - Page ${page.pageNumber} of ${page.totalPages}`,
-              isRedacted: page.redactionsApplied > 0,
-              pageNumber: page.pageNumber,
-              totalPages: page.totalPages,
-              sourceLabel: "Rendered from PuTTY session log",
-            },
-          });
-
-          generatedEvidenceIds.push(evidenceRow.id);
+          for (const checkId of checkIds.length > 0 ? checkIds : [null]) {
+            const evidenceRow = await prisma.evidence.create({
+              data: {
+                commandExecutionId: exec.id,
+                deviceId: device.id,
+                checkId,
+                title,
+                appendixMapping,
+                imageReference: stored.storagePath,
+                caption: `${appendixMapping}: ${title} (${device.hostname}) - Page ${page.pageNumber} of ${page.totalPages}`,
+                isRedacted: page.redactionsApplied > 0,
+                pageNumber: page.pageNumber,
+                totalPages: page.totalPages,
+                sourceLabel: "Rendered from PuTTY session log",
+              },
+            });
+            generatedEvidenceIds.push(evidenceRow.id);
+          }
           totalImagesGenerated++;
         }
       }

@@ -362,9 +362,19 @@ export function ChecklistTable({
                       <span className="rounded bg-slate-800/80 px-2 py-0.5 text-slate-300 font-medium">
                         Section: {item.targetSection}
                       </span>
+                      {(item.evidenceRequired || item.targetAppendix || item.sourceType === "CLI") && (
+                        <span className="rounded bg-violet-950/70 px-2 py-0.5 text-violet-200 border border-violet-500/30">
+                          Evidence required: {item.sourceType === "GUI_MANUAL" ? "GUI/manual" : item.sourceType === "EXTERNAL_REFERENCE" ? "external reference" : "CLI"}
+                        </span>
+                      )}
                       {item.targetAppendix && (
                         <span className="rounded bg-blue-500/10 text-blue-300 border border-blue-500/20 px-2 py-0.5 font-mono text-[10px]">
                           {item.targetAppendix}
+                        </span>
+                      )}
+                      {item.guideSource && (
+                        <span className="rounded bg-slate-950/70 px-2 py-0.5 text-[10px] text-slate-300 border border-slate-800">
+                          Guide source: {item.guideSource.document}, row {item.guideSource.tableRow}{item.guideSource.page ? `, page ${item.guideSource.page}` : ""}
                         </span>
                       )}
                       {item.thresholdDescription && (
@@ -429,15 +439,14 @@ export function ChecklistTable({
                   )}
 
                   {/* Collection Instructions */}
-                  {item.collectionInstructions && (
+                  {(item.collectionInstructions || item.evaluationPolicy) && (
                     <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-3 space-y-1.5">
                       <h5 className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
                         <Sliders className="h-3.5 w-3.5 text-blue-400" />
-                        Engineer Collection Instructions &amp; Threshold Rules
+                        Evidence &amp; Evaluation Guidance
                       </h5>
-                      <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                        {item.collectionInstructions}
-                      </p>
+                      {item.collectionInstructions && <p className="text-xs text-slate-300 leading-relaxed font-sans">{item.collectionInstructions}</p>}
+                      {item.evaluationPolicy && <p className="text-xs text-slate-300 leading-relaxed font-sans"><span className="font-semibold text-slate-200">Evaluation: </span>{item.evaluationPolicy}</p>}
                     </div>
                   )}
 
@@ -453,16 +462,22 @@ export function ChecklistTable({
                           return (
                             <div
                               key={cmd.id}
-                              className="flex items-center justify-between gap-2 rounded-lg border border-slate-800/80 bg-slate-950 p-2 text-xs font-mono"
+                              className="rounded-lg border border-slate-800/80 bg-slate-950 p-2 space-y-1"
                             >
-                              <div className="flex items-center gap-2 overflow-hidden">
+                              <div className="flex items-center justify-between gap-2 text-xs font-mono">
+                                <div className="flex items-center gap-2 overflow-hidden">
                                 <Terminal className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
                                 <span className="text-emerald-400 font-semibold truncate select-all">
                                   {cmd.command}
                                 </span>
-                                <Badge variant="success" className="text-[9px] py-0">
-                                  Read-Only
-                                </Badge>
+                                {cmd.isReadOnly ? (
+                                  <Badge variant="success" className="text-[9px] py-0">Read-Only</Badge>
+                                ) : (
+                                  <Badge variant="warning" className="text-[9px] py-0">Engineer-Controlled</Badge>
+                                )}
+                                {cmd.contextVerification === "VERIFY_REQUIRED" && (
+                                  <Badge variant="warning" className="text-[9px] py-0">Verify CLI mode</Badge>
+                                )}
                               </div>
                               <button
                                 type="button"
@@ -488,6 +503,12 @@ export function ChecklistTable({
                                   </>
                                 )}
                               </button>
+                              </div>
+                              {(cmd.executionContext || cmd.notes) && (
+                              <p className="ml-6 text-[11px] text-amber-200">
+                                {cmd.executionContext ? `Execution context: ${cmd.executionContext}. ` : ""}{cmd.notes}
+                              </p>
+                              )}
                             </div>
                           );
                         })}

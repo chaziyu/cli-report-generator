@@ -12,8 +12,16 @@ import { NextRequest } from "next/server";
 describe("Engineer Review & Approval API Integration", () => {
   let sessionId: string;
   let deviceId: string;
+  let checkpointSessionId: string;
 
   afterAll(async () => {
+    if (checkpointSessionId) {
+      try {
+        await prisma.pMSession.delete({ where: { id: checkpointSessionId } });
+      } catch {
+        // ignore cleanup error
+      }
+    }
     if (sessionId) {
       try {
         await prisma.pMSession.delete({ where: { id: sessionId } });
@@ -297,5 +305,52 @@ describe("Engineer Review & Approval API Integration", () => {
       where: { id: sessionId },
     });
     expect(updatedSession?.status).toBe("REVIEW");
+  });
+
+  it("requires a justified exception before approving a guide task without evidence", async () => {
+    const session = await prisma.pMSession.create({
+      data: {
+        customer: "Check Point Evidence Review Test",
+        vendor: "checkpoint",
+        devices: { create: [{ hostname: "CP-GW-REVIEW", model: "Quantum 7000M" }] },
+      },
+      include: { devices: true },
+    });
+    checkpointSessionId = session.id;
+    const checkpointDeviceId = session.devices[0].id;
+    const makeRequest = (reviewNotes?: string) => new NextRequest(
+      `http://localhost:3000/api/sessions/${checkpointSessionId}/review`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deviceId: checkpointDeviceId,
+          action: "SINGLE",
+          decision: {
+            checkId: "cp-gui-access",
+            decision: "APPROVED",
+            finalStatus: "PASS",
+            reviewNotes,
+          },
+        }),
+      }
+    );
+
+    const rejected = await postReviewApi(makeRequest(), {
+      params: Promise.resolve({ id: checkpointSessionId }),
+    });
+    expect(rejected.status).toBe(400);
+    expect((await rejected.json()).error).toContain("GUI/manual evidence is missing");
+
+    const approved = await postReviewApi(
+      makeRequest("Customer-approved exception: GUI access was unavailable during this PM."),
+      { params: Promise.resolve({ id: checkpointSessionId }) }
+    );
+    expect(approved.status).toBe(200);
+    const result = await prisma.checklistResult.findUnique({
+      where: { deviceId_checkId: { deviceId: checkpointDeviceId, checkId: "cp-gui-access" } },
+      include: { reviewDecisions: true },
+    });
+    expect(result?.reviewDecisions[0]?.reviewNotes).toContain("Customer-approved exception");
   });
 });

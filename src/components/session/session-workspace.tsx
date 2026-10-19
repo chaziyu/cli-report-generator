@@ -294,6 +294,7 @@ export function SessionWorkspace({
       {activeView === "checklist" ? (
         <ChecklistWorkspace
           sessionId={session.id}
+          vendorId={session.vendor}
           devices={session.devices}
           customerName={session.customer}
           vendorName={session.vendor}

@@ -337,7 +337,7 @@ export function EvidenceModal({
                 Task: <strong className="text-slate-200">{taskName}</strong>
               </span>
               <span>
-                Device: <strong className="text-slate-200">{activeItem.deviceHostname || "FortiGate"}</strong>
+                Device: <strong className="text-slate-200">{activeItem.deviceHostname || "Firewall"}</strong>
               </span>
               {isCli && activeItem.totalPages > 1 && (
                 <span className="font-mono text-slate-400">

@@ -14,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { VendorCommandDefinition } from "@/vendors/types";
+import { VendorCheckItemDefinition, VendorCommandDefinition } from "@/vendors/types";
 
 export interface CliCommandSectionProps {
   vendor?: string;
@@ -39,6 +39,7 @@ export function CliCommandSection({
 }: CliCommandSectionProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const [commands, setCommands] = useState<VendorCommandDefinition[]>([]);
+  const [checklist, setChecklist] = useState<VendorCheckItemDefinition[]>([]);
   const [vendorDisplayName, setVendorDisplayName] = useState("FortiGate");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,13 +64,17 @@ export function CliCommandSection({
       try {
         setLoading(true);
         setError(null);
-        const res = await fetch(`/api/vendors/${vendor}/commands`);
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(data.error || "Failed to load vendor commands");
+        const [res, checklistRes] = await Promise.all([
+          fetch(`/api/vendors/${vendor}/commands`),
+          fetch(`/api/vendors/${vendor}/checklist`),
+        ]);
+        const [data, checklistData] = await Promise.all([res.json(), checklistRes.json()]);
+        if (!res.ok || !data.success || !checklistRes.ok || !checklistData.success) {
+          throw new Error(data.error || checklistData.error || "Failed to load vendor guide");
         }
         if (isMounted) {
           setCommands(data.data.commands || []);
+          setChecklist(checklistData.data.items || []);
           if (data.data.displayName) {
             setVendorDisplayName(data.data.displayName);
           }
@@ -125,6 +130,16 @@ export function CliCommandSection({
     });
   }, [commands, selectedCategory, searchQuery]);
 
+  const filteredChecklist = useMemo(() => checklist.filter((item) => {
+    const taskCommands = item.commands.map((id) => commands.find((command) => command.id === id));
+    const matchesCategory = selectedCategory === "ALL" || mapGroupToPmCategory(item.group).toLowerCase() === selectedCategory.toLowerCase();
+    const matchesSearch = searchQuery === "" ||
+      item.taskName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      taskCommands.some((command) => command?.command.toLowerCase().includes(searchQuery.toLowerCase()));
+    return matchesCategory && matchesSearch;
+  }), [checklist, commands, selectedCategory, searchQuery]);
+
   const handleCopy = (id: string, commandText: string) => {
     navigator.clipboard.writeText(commandText);
     setCopiedId(id);
@@ -152,14 +167,14 @@ export function CliCommandSection({
             <div>
               <div className="flex items-center gap-2">
                 <CardTitle className="text-base text-white font-semibold">
-                  CLI Command Reference
+                  {vendorDisplayName} PM Guide &amp; CLI Commands
                 </CardTitle>
                 <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
                   {commands.length} Commands
                 </span>
               </div>
               <CardDescription className="text-xs text-slate-400 mt-0.5">
-                Copy individual commands into customer&apos;s PuTTY terminal during remote PM session
+                Follow each checklist task, then copy its individual command into the customer&apos;s PuTTY terminal.
               </CardDescription>
             </div>
           </div>
@@ -273,6 +288,50 @@ export function CliCommandSection({
           {/* Compact Commands List */}
           {!loading && !error && (
             <div className="space-y-2.5">
+              <details open className="rounded-lg border border-slate-800 bg-[#0c1222]">
+                <summary className="cursor-pointer px-3 py-2.5 text-sm font-semibold text-white">
+                  Guide checklist ({filteredChecklist.length} of {checklist.length} tasks)
+                </summary>
+                <div className="space-y-2 border-t border-slate-800 p-3">
+                  {filteredChecklist.map((item) => {
+                    const taskCommands = item.commands.map((id) => commands.find((command) => command.id === id)).filter((command): command is VendorCommandDefinition => Boolean(command));
+                    return (
+                      <details key={item.id} className="rounded-md border border-slate-800 bg-[#070b14] p-3">
+                        <summary className="cursor-pointer text-xs font-semibold text-slate-100">
+                          {item.itemNumber ? `${item.itemNumber} ` : ""}{item.taskName}
+                        </summary>
+                        <div className="mt-2 space-y-2 text-xs text-slate-300">
+                          <p>{item.description}</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            <Badge variant="outline">{item.sourceType === "CLI" ? "CLI evidence" : item.sourceType === "GUI_MANUAL" ? "GUI / engineer verification" : "External reference"}</Badge>
+                            {item.thresholdDescription && <Badge variant="outline">{item.thresholdDescription}</Badge>}
+                            {item.guideSource && <Badge variant="outline">Guide table row {item.guideSource.tableRow}</Badge>}
+                          </div>
+                          {item.collectionInstructions && <p>{item.collectionInstructions}</p>}
+                          {item.evaluationPolicy && <p><span className="font-semibold text-slate-200">Evaluation: </span>{item.evaluationPolicy}</p>}
+                          {taskCommands.length > 0 ? (
+                            <div className="space-y-1.5 pt-1">
+                              {taskCommands.map((command) => (
+                                <div key={command.id} className="flex flex-wrap items-center gap-2 rounded border border-slate-800 bg-slate-950/60 p-2">
+                                  <code className="min-w-0 flex-1 break-all font-mono text-emerald-300">{command.command}</code>
+                                  <Button type="button" size="sm" variant="outline" onClick={() => handleCopy(command.id, command.command)}>
+                                    {copiedId === command.id ? "Copied" : "Copy command"}
+                                  </Button>
+                                  {!command.isReadOnly && <Badge variant="warning">Engineer controlled</Badge>}
+                                  {command.executionContext && <span className="text-amber-200">{command.executionContext}{command.contextVerification === "VERIFY_REQUIRED" ? " — verify before use" : ""}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          ) : <p className="text-amber-200">No CLI command. Complete the evidence or external verification described above.</p>}
+                        </div>
+                      </details>
+                    );
+                  })}
+                  {filteredChecklist.length === 0 && <p className="text-xs text-slate-400">No guide tasks match this filter.</p>}
+                </div>
+              </details>
+
+              <h4 className="pt-2 text-xs font-semibold uppercase tracking-wide text-slate-300">Command reference</h4>
               {filteredCommands.length === 0 ? (
                 <div className="rounded-lg border border-slate-800 bg-[#0c1222] p-6 text-center text-xs text-slate-400">
                   No commands match the selected filter.

@@ -39,7 +39,8 @@ export class GuiEvidenceMapper {
         checkId: item.id,
         taskName: item.taskName,
         itemNumber: item.itemNumber,
-        appendixMapping: item.targetAppendix || "Appendix - Manual Evidence",
+        appendixMapping:
+          item.targetAppendix || (vendorId === "fortigate" ? "Appendix - Manual Evidence" : "Manual evidence"),
         isPrimaryGui,
       };
     });

@@ -22,6 +22,9 @@ import {
   Sparkles,
   Play,
   RotateCcw,
+  Trash2,
+  Loader2,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -106,6 +109,8 @@ export function ReportGeneratorWorkspace({
   // Active Session state
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [vendor, setVendor] = useState("fortigate");
+  const [supportedVendors, setSupportedVendors] = useState<Array<{ id: string; displayName: string }>>([]);
+  const [vendorLoadError, setVendorLoadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
@@ -125,6 +130,16 @@ export function ReportGeneratorWorkspace({
   // Recent Sessions Drawer (collapsed by default)
   const [showRecent, setShowRecent] = useState(false);
   const [recentSessions, setRecentSessions] = useState<RecentSessionItem[]>(initialSessions);
+
+  // Session Deletion state
+  const [sessionToDelete, setSessionToDelete] = useState<RecentSessionItem | null>(null);
+  const [isDeletingSession, setIsDeletingSession] = useState(false);
+  const [deleteSessionError, setDeleteSessionError] = useState<string | null>(null);
+  const [deleteSuccessMessage, setDeleteSuccessMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRecentSessions(initialSessions);
+  }, [initialSessions]);
 
   // Session Devices (for multi-device screenshot and checklist targeting)
   const [sessionDevices, setSessionDevices] = useState<
@@ -199,6 +214,20 @@ export function ReportGeneratorWorkspace({
   // Drag and drop state
   const [isDragging, setIsDragging] = useState(false);
 
+  useEffect(() => {
+    let mounted = true;
+    fetch("/api/vendors")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || "Failed to load supported vendors");
+        if (mounted) setSupportedVendors(data.data.map((item: { id: string; displayName: string }) => ({ id: item.id, displayName: item.displayName })));
+      })
+      .catch((error) => {
+        if (mounted) setVendorLoadError(error instanceof Error ? error.message : "Failed to load supported vendors");
+      });
+    return () => { mounted = false; };
+  }, []);
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -217,7 +246,8 @@ export function ReportGeneratorWorkspace({
     const logFiles: File[] = [];
     for (const f of files) {
       if (f.name.toLowerCase().endsWith(".docx")) {
-        setStagedDocx(f);
+        if (vendor === "fortigate") setStagedDocx(f);
+        else setUploadError("Word export is unavailable for this vendor until an approved CTC report layout is verified.");
       } else if (
         f.name.toLowerCase().endsWith(".txt") ||
         f.name.toLowerCase().endsWith(".log")
@@ -231,8 +261,21 @@ export function ReportGeneratorWorkspace({
   };
 
   const handleDocxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (vendor !== "fortigate") {
+      setUploadError("Word export is unavailable for this vendor until an approved CTC report layout is verified.");
+      e.target.value = "";
+      return;
+    }
     if (e.target.files && e.target.files[0]) {
       setStagedDocx(e.target.files[0]);
+    }
+  };
+
+  const handleVendorChange = (nextVendor: string) => {
+    setVendor(nextVendor);
+    if (nextVendor !== "fortigate" && stagedDocx) {
+      setStagedDocx(null);
+      setUploadError("The staged Word report was cleared because this vendor has no verified CTC layout.");
     }
   };
 
@@ -510,6 +553,23 @@ export function ReportGeneratorWorkspace({
       } catch {
         // non-blocking
       }
+
+      // Refresh recent sessions list
+      try {
+        const listRes = await fetch("/api/sessions");
+        const listData = await listRes.json();
+        if (listRes.ok && listData.success && Array.isArray(listData.data)) {
+          setRecentSessions(
+            listData.data.map((s: any) => ({
+              ...s,
+              pmDate: typeof s.pmDate === "string" ? s.pmDate : new Date(s.pmDate).toISOString(),
+              createdAt: typeof s.createdAt === "string" ? s.createdAt : new Date(s.createdAt).toISOString(),
+            }))
+          );
+        }
+      } catch {
+        // non-blocking
+      }
     } catch (err: unknown) {
       setPipelineError(err instanceof Error ? err.message : "PM processing execution failed");
     } finally {
@@ -539,6 +599,46 @@ export function ReportGeneratorWorkspace({
       setPipelineError(err instanceof Error ? err.message : "Failed to confirm mapping");
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  // Handle deleting a past PM session
+  const handleDeleteSession = async () => {
+    if (!sessionToDelete) return;
+
+    setIsDeletingSession(true);
+    setDeleteSessionError(null);
+
+    try {
+      const res = await fetch(`/api/sessions/${sessionToDelete.id}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to delete PM session");
+      }
+
+      const deletedCustomer = sessionToDelete.customer;
+      const deletedId = sessionToDelete.id;
+
+      // Immediately remove from recent sessions in UI
+      setRecentSessions((prev) => prev.filter((s) => s.id !== deletedId));
+
+      // If the currently loaded session was deleted, reset workspace
+      if (sessionId === deletedId) {
+        startNewSession();
+      }
+
+      setSessionToDelete(null);
+      setDeleteSuccessMessage(`PM session for "${deletedCustomer}" was deleted successfully.`);
+      setTimeout(() => setDeleteSuccessMessage(null), 4000);
+    } catch (err: unknown) {
+      setDeleteSessionError(
+        err instanceof Error ? err.message : "Failed to delete PM session"
+      );
+    } finally {
+      setIsDeletingSession(false);
     }
   };
 
@@ -603,11 +703,11 @@ export function ReportGeneratorWorkspace({
               PM Report Generator
             </h1>
             <span className="rounded-md bg-blue-500/15 px-2.5 py-0.5 text-xs font-semibold text-blue-300 border border-blue-500/30">
-              FortiGate Active
+              {supportedVendors.find((item) => item.id === vendor)?.displayName || "Loading vendor adapters"} Guide
             </span>
           </div>
           <p className="mt-1 text-sm text-slate-300">
-            Upload your PuTTY session log and CTC Word report to automatically extract metadata and prepare findings.
+            Follow the selected vendor guide, collect PuTTY logs, and review evidence. Word export is available only for verified CTC layouts.
           </p>
         </div>
 
@@ -629,14 +729,16 @@ export function ReportGeneratorWorkspace({
           <label className="text-xs font-medium text-slate-400">Vendor Adapter:</label>
           <select
             value={vendor}
-            onChange={(e) => setVendor(e.target.value)}
+            onChange={(e) => handleVendorChange(e.target.value)}
+            disabled={supportedVendors.length === 0 || Boolean(sessionId)}
             className="rounded-lg border border-slate-700 bg-[#070b14] px-3 py-1.5 text-xs font-semibold text-slate-100 focus:outline-none focus:border-blue-500"
           >
-            <option value="fortigate">Fortinet FortiGate (QMS-P09-F01)</option>
-            <option value="paloalto" disabled>Palo Alto Networks (Future)</option>
-            <option value="checkpoint" disabled>Check Point Quantum (Future)</option>
+            {supportedVendors.map((item) => (
+              <option key={item.id} value={item.id}>{item.displayName}</option>
+            ))}
           </select>
         </div>
+        {vendorLoadError && <p className="text-xs text-rose-300">{vendorLoadError}</p>}
       </div>
 
       {/* CLI Command Reference Section (Phase 2) */}
@@ -646,9 +748,7 @@ export function ReportGeneratorWorkspace({
       {recoveryData?.files && (recoveryData.files.docxReport || recoveryData.files.puttyLogs.length > 0) && (
         <AttachedFilesCard
           files={recoveryData.files}
-          onUploadAdditional={() => {
-            docxInputRef.current?.click();
-          }}
+          onUploadAdditional={vendor === "fortigate" ? () => docxInputRef.current?.click() : undefined}
         />
       )}
 
@@ -683,7 +783,7 @@ export function ReportGeneratorWorkspace({
               Drag &amp; drop files here, or choose from your computer
             </p>
             <p className="text-xs text-slate-400 mt-1">
-              Supports PuTTY terminal logs (`.txt`, `.log`) and CTC Word templates (`.docx`)
+              Supports PuTTY terminal logs (`.txt`, `.log`){vendor === "fortigate" ? " and the verified CTC Word template (.docx)" : ""}
             </p>
 
             <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
@@ -692,6 +792,7 @@ export function ReportGeneratorWorkspace({
                 type="file"
                 accept=".docx"
                 onChange={handleDocxChange}
+                disabled={vendor !== "fortigate"}
                 className="hidden"
               />
               <Button
@@ -699,10 +800,11 @@ export function ReportGeneratorWorkspace({
                 variant="outline"
                 size="sm"
                 onClick={() => docxInputRef.current?.click()}
+                disabled={vendor !== "fortigate"}
                 className="gap-2 border-slate-700 bg-slate-800 text-slate-200 hover:text-white hover:bg-slate-700"
               >
                 <FileText className="h-4 w-4 text-blue-400" />
-                <span>Select Word Report (.docx)</span>
+                <span>{vendor === "fortigate" ? "Select Word Report (.docx)" : "Word export unavailable"}</span>
               </Button>
 
               <input
@@ -835,6 +937,11 @@ export function ReportGeneratorWorkspace({
                   )}
                 </Button>
               </div>
+              {vendor !== "fortigate" && (
+                <p className="mt-3 text-center text-xs text-amber-200">
+                  Continue with CLI and GUI evidence. No approved CTC Word report layout is verified for this vendor.
+                </p>
+              )}
             </div>
           )}
 
@@ -970,7 +1077,7 @@ export function ReportGeneratorWorkspace({
                   <p className="text-[11px] font-medium text-slate-400">Vendor Engine</p>
                   <p className="mt-1 text-sm font-semibold text-white flex items-center gap-1.5">
                     <span className="h-2 w-2 rounded-full bg-blue-400" />
-                    FortiGate (v1.1)
+                    {supportedVendors.find((item) => item.id === vendor)?.displayName || vendor}{vendor === "fortigate" ? " (QMS-P09-F01 v1.1)" : " guide"}
                   </p>
                 </div>
 
@@ -1020,6 +1127,7 @@ export function ReportGeneratorWorkspace({
 
       {/* GUI Screenshots & Manual Evidence */}
       <GuiScreenshotUploader
+        key={vendor}
         sessionId={sessionId}
         devices={sessionDevices}
         vendor={vendor}
@@ -1033,17 +1141,16 @@ export function ReportGeneratorWorkspace({
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                <h3 className="text-base font-semibold text-white">Automated PM Report Generation</h3>
-                <Badge
-                  variant="outline"
-                  className="border-emerald-500/40 text-emerald-300 bg-emerald-950/40 text-[10px] font-mono"
-                >
-                  QMS-P09-F01 v1.1
-                </Badge>
+                <h3 className="text-base font-semibold text-white">{vendor === "fortigate" ? "Automated PM Report Generation" : "PM Evidence Processing"}</h3>
+                {vendor === "fortigate" ? (
+                  <Badge variant="outline" className="border-emerald-500/40 text-emerald-300 bg-emerald-950/40 text-[10px] font-mono">QMS-P09-F01 v1.1</Badge>
+                ) : (
+                  <Badge variant="outline" className="border-amber-500/40 text-amber-200 bg-amber-950/30 text-[10px]">CLI-only guide workflow</Badge>
+                )}
               </div>
               <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-                Executes complete pipeline in one action: inspects CTC Word tables, segments PuTTY commands,
-                deterministically evaluates 21 PM rules, and atomically renders terminal screenshot evidence.
+                Processes the selected vendor checklist, segments PuTTY commands, evaluates supported findings,
+                and renders terminal evidence. Unverified items remain in engineer review.
               </p>
             </div>
 
@@ -1057,12 +1164,12 @@ export function ReportGeneratorWorkspace({
                 {isProcessing ? (
                   <>
                     <RefreshCw className="h-4 w-4 animate-spin text-white" />
-                    <span>Processing PM Report...</span>
+                    <span>Processing PM Session...</span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="h-4 w-4 text-emerald-200" />
-                    <span>Generate PM Report</span>
+                    <span>{vendor === "fortigate" ? "Generate PM Report" : "Process PM Session"}</span>
                   </>
                 )}
               </Button>
@@ -1134,6 +1241,13 @@ export function ReportGeneratorWorkspace({
 
         {showRecent && (
           <div className="mt-4 space-y-3">
+            {deleteSuccessMessage && (
+              <div className="flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-950/40 px-3.5 py-2.5 text-xs text-emerald-300">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                <span>{deleteSuccessMessage}</span>
+              </div>
+            )}
+
             {recentSessions.length === 0 ? (
               <p className="text-xs text-slate-400 italic">No prior PM reports recorded yet.</p>
             ) : (
@@ -1166,14 +1280,14 @@ export function ReportGeneratorWorkspace({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
                       <Button
                         size="sm"
                         onClick={() => {
                           loadSession(session.id);
                           window.scrollTo({ top: 0, behavior: "smooth" });
                         }}
-                        className="gap-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs h-8"
+                        className="gap-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs h-8 cursor-pointer"
                       >
                         <span>Resume on Generator</span>
                         <ArrowRight className="h-3.5 w-3.5" />
@@ -1183,17 +1297,169 @@ export function ReportGeneratorWorkspace({
                         <Button
                           size="sm"
                           variant="outline"
-                          className="gap-1.5 border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs h-8"
+                          className="gap-1.5 border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs h-8 cursor-pointer"
                           title="Open multi-tab session overview workspace"
                         >
                           <span>Workspace</span>
                         </Button>
                       </Link>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setDeleteSessionError(null);
+                          setSessionToDelete(session);
+                        }}
+                        className="gap-1.5 border-rose-900/40 bg-rose-950/20 hover:bg-rose-900/40 text-rose-300 hover:text-rose-200 text-xs h-8 cursor-pointer"
+                        title="Delete this past PM session"
+                        aria-label={`Delete PM session for ${session.customer}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-rose-400" />
+                        <span>Delete</span>
+                      </Button>
                     </div>
                   </div>
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Delete Confirmation Modal */}
+        {sessionToDelete && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-pm-title"
+          >
+            <div
+              className="relative flex flex-col w-full max-w-lg rounded-2xl border border-slate-800 bg-[#070b14] shadow-2xl overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/80 px-6 py-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400">
+                    <Trash2 className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 id="delete-pm-title" className="text-sm font-semibold text-white">
+                      Delete Past PM Report
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Permanent deletion of past maintenance records
+                    </p>
+                  </div>
+                </div>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => !isDeletingSession && setSessionToDelete(null)}
+                  disabled={isDeletingSession}
+                  className="h-8 w-8 p-0 text-slate-400 hover:text-white cursor-pointer"
+                  aria-label="Close dialog"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 space-y-4">
+                <p className="text-sm text-slate-200">
+                  Are you sure you want to delete the PM report record for{" "}
+                  <span className="font-semibold text-white">{sessionToDelete.customer}</span>?
+                </p>
+
+                {/* Session Meta Summary Box */}
+                <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 space-y-2 text-xs">
+                  <div className="flex justify-between items-center py-1 border-b border-slate-800/60">
+                    <span className="text-slate-400">Customer</span>
+                    <span className="font-medium text-slate-200">{sessionToDelete.customer}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-slate-800/60">
+                    <span className="text-slate-400">PM Date</span>
+                    <span className="font-medium text-slate-200">{formatDate(sessionToDelete.pmDate)}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-slate-800/60">
+                    <span className="text-slate-400">Status</span>
+                    <Badge variant="outline" className="text-[10px] uppercase">
+                      {sessionToDelete.status}
+                    </Badge>
+                  </div>
+                  {sessionToDelete.devices.length > 0 && (
+                    <div className="flex justify-between items-center py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Target Devices</span>
+                      <span className="font-mono text-slate-300">
+                        {sessionToDelete.devices.map((d) => d.hostname).join(", ")}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between items-center py-1">
+                    <span className="text-slate-400">Retained Items</span>
+                    <span className="text-slate-300">
+                      {sessionToDelete._count.uploadedFiles} uploaded file(s) ·{" "}
+                      {sessionToDelete._count.generatedReports} generated report(s)
+                    </span>
+                  </div>
+                </div>
+
+                {/* Warning Alert */}
+                <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+                  <p>
+                    This action is permanent and cannot be undone. All PuTTY session logs,
+                    evaluated PM checklist findings, evidence screenshots, and exported Word reports
+                    for this session will be permanently deleted.
+                  </p>
+                </div>
+
+                {/* Error Banner */}
+                {deleteSessionError && (
+                  <div className="flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-300">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+                    <span>{deleteSessionError}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-end gap-3 border-t border-slate-800 bg-slate-950/60 px-6 py-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSessionToDelete(null)}
+                  disabled={isDeletingSession}
+                  className="border-slate-700 text-slate-300 hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
+                  onClick={handleDeleteSession}
+                  disabled={isDeletingSession}
+                  className="gap-1.5 bg-rose-600 hover:bg-rose-500 text-white cursor-pointer"
+                >
+                  {isDeletingSession ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Deleting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>Delete PM Session</span>
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
           </div>
         )}
       </div>

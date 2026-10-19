@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { prisma } from "@/lib/db/prisma";
 import { createSessionSchema, createDeviceSchema } from "@/lib/validations/session";
 import { storage } from "@/lib/storage";
+import { DELETE as deleteSessionApi } from "@/app/api/sessions/[id]/route";
+import { NextRequest } from "next/server";
 
 describe("PM Session & Device Management Integration", () => {
   let createdSessionId: string;
@@ -212,6 +214,94 @@ describe("PM Session & Device Management Integration", () => {
         where: { sessionId: createdSessionId },
       });
       expect(files.length).toBe(0);
+    });
+
+    it("deletes a session via DELETE /api/sessions/[id] route with complete file and evidence cleanup", async () => {
+      // 1. Create a session with device, uploaded file, and evidence
+      const session = await prisma.pMSession.create({
+        data: {
+          customer: "Delete Route Test Customer",
+          vendor: "fortigate",
+          devices: {
+            create: [{ hostname: "DEL-TEST-FW", model: "FG-100F", role: "Primary" }],
+          },
+        },
+        include: { devices: true },
+      });
+
+      const fileData = Buffer.from("Delete test log contents\n");
+      const saved = await storage.saveFile(session.id, "logs", "delete_test.log", fileData, "text/plain");
+
+      const uploaded = await prisma.uploadedFile.create({
+        data: {
+          sessionId: session.id,
+          deviceId: session.devices[0].id,
+          type: "PUTTY_LOG",
+          originalFilename: saved.originalFilename,
+          storedFilename: saved.storedFilename,
+          storagePath: saved.storagePath,
+          hashSha256: saved.hashSha256,
+          sizeBytes: saved.sizeBytes,
+          mimeType: saved.mimeType,
+        },
+      });
+
+      const evidence = await prisma.evidence.create({
+        data: {
+          uploadedFileId: uploaded.id,
+          deviceId: session.devices[0].id,
+          checkId: "fg-hw-cpu",
+          title: "Delete Test Evidence",
+          imageReference: saved.storagePath,
+        },
+      });
+
+      // Verify file and evidence exist before deletion
+      expect(await storage.fileExists(saved.storagePath)).toBe(true);
+      expect(await prisma.evidence.findUnique({ where: { id: evidence.id } })).not.toBeNull();
+
+      // 2. Call DELETE /api/sessions/[id]
+      const req = new NextRequest(`http://localhost:3000/api/sessions/${session.id}`, {
+        method: "DELETE",
+      });
+      const res = await deleteSessionApi(req, {
+        params: Promise.resolve({ id: session.id }),
+      });
+
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.success).toBe(true);
+      expect(json.message).toBe("PM session deleted successfully");
+
+      // 3. Verify session, device, uploaded file, and evidence are completely gone
+      const checkSession = await prisma.pMSession.findUnique({ where: { id: session.id } });
+      expect(checkSession).toBeNull();
+
+      const checkDevices = await prisma.device.findMany({ where: { sessionId: session.id } });
+      expect(checkDevices.length).toBe(0);
+
+      const checkFiles = await prisma.uploadedFile.findMany({ where: { sessionId: session.id } });
+      expect(checkFiles.length).toBe(0);
+
+      const checkEvidence = await prisma.evidence.findUnique({ where: { id: evidence.id } });
+      expect(checkEvidence).toBeNull();
+
+      // 4. Verify disk file was deleted
+      expect(await storage.fileExists(saved.storagePath)).toBe(false);
+    });
+
+    it("returns 404 when attempting to delete a non-existent session", async () => {
+      const req = new NextRequest("http://localhost:3000/api/sessions/non-existent-session-id", {
+        method: "DELETE",
+      });
+      const res = await deleteSessionApi(req, {
+        params: Promise.resolve({ id: "non-existent-session-id" }),
+      });
+
+      expect(res.status).toBe(404);
+      const json = await res.json();
+      expect(json.success).toBe(false);
+      expect(json.error).toBe("PM session not found");
     });
   });
 });

@@ -79,6 +79,7 @@ model CommandExecution {
   segmentIndex  Int?       // Position/order in original log file
   command       String
   commandGroup  String?    // "System", "Performance", "Interfaces", "Licensing", etc.
+  executionContext String? // Vendor-specific CLI prompt context, when detected
   rawOutputRef  String?    // path or reference to raw snippet
   outputContent String?    // text of command output if stored in db
   parseStatus   String     @default("PENDING") // PENDING, PARSED, FAILED, UNSUPPORTED

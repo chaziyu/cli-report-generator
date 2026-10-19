@@ -508,6 +508,7 @@ export class ReportPipeline {
         stagedPath: string;
         finalPath: string;
         evidenceData: any;
+        checkIds: (string | null)[];
       }> = [];
       const obsoleteEvidenceIdsToDelete: string[] = [];
       const obsoleteStoragePathsToDelete: string[] = [];
@@ -522,12 +523,24 @@ export class ReportPipeline {
           );
 
           for (const exec of executionsWithOutput) {
+            const cleanCmd = exec.command.trim().toLowerCase();
+            const cmdDef = adapterCommands.find(
+              (c) =>
+                c.command.toLowerCase() === cleanCmd ||
+                c.expectedOutputs.some((exp) => cleanCmd.startsWith(exp.toLowerCase()))
+            );
+            const mappedCheckIds = cmdDef?.guideSource
+              ? Array.from(new Set(cmdDef.mappedCheckIds || []))
+              : [];
+
             // Check if existing valid evidence already exists for this execution
             const priorEvidence = await prisma.evidence.findMany({
               where: { commandExecutionId: exec.id, isExcluded: false },
             });
 
-            let hasValidExistingFiles = priorEvidence.length > 0;
+            let hasValidExistingFiles =
+              priorEvidence.length > 0 &&
+              (mappedCheckIds.length === 0 || mappedCheckIds.every((checkId) => priorEvidence.some((evidence) => evidence.checkId === checkId)));
             if (hasValidExistingFiles) {
               for (const pe of priorEvidence) {
                 const fExists = await storage.fileExists(pe.imageReference);
@@ -540,23 +553,15 @@ export class ReportPipeline {
 
             if (hasValidExistingFiles) {
               // Evidence is already up-to-date for this unchanged execution
-              generatedEvidenceCount += priorEvidence.length;
+              generatedEvidenceCount += new Set(priorEvidence.map((evidence) => evidence.pageNumber)).size;
               continue;
             }
 
             // Otherwise, render new evidence pages for this execution
-            const cleanCmd = exec.command.trim().toLowerCase();
-            const cmdDef = adapterCommands.find(
-              (c) =>
-                c.command.toLowerCase() === cleanCmd ||
-                c.expectedOutputs.some((exp) =>
-                  cleanCmd.startsWith(exp.toLowerCase())
-                )
-            );
-
             const title = cmdDef?.description || cmdDef?.command || exec.command;
             const appendixMapping =
-              cmdDef?.targetAppendix || "Appendix - Terminal Evidence";
+              cmdDef?.targetAppendix || (cmdDef?.guideSource ? "Terminal evidence" : "Appendix - Terminal Evidence");
+            const evidenceCheckIds = mappedCheckIds.length > 0 ? mappedCheckIds : [null];
 
             // Mark prior evidence for this specific execution to be retired upon promotion
             for (const pe of priorEvidence) {
@@ -595,7 +600,7 @@ export class ReportPipeline {
               }
 
               // Final promoted file path
-              const finalFilename = `cli_${device.hostname}_${exec.id}_p${page.pageNumber}.png`.replace(
+              const finalFilename = `cli_${device.hostname}_${exec.id}_${runId}_p${page.pageNumber}.png`.replace(
                 /[^a-zA-Z0-9_.-]/g,
                 "_"
               );
@@ -623,6 +628,7 @@ export class ReportPipeline {
                   sourceLabel: "Rendered from PuTTY session log",
                   isExcluded: false,
                 },
+                checkIds: evidenceCheckIds,
               });
             }
           }
@@ -658,9 +664,11 @@ export class ReportPipeline {
           }
 
           for (const item of stagedFilesToPromote) {
-            await tx.evidence.create({
-              data: item.evidenceData,
-            });
+            for (const checkId of item.checkIds) {
+              await tx.evidence.create({
+                data: { ...item.evidenceData, checkId },
+              });
+            }
             generatedEvidenceCount++;
           }
         });

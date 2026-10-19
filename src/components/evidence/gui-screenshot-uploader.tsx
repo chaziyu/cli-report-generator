@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatBytes } from "@/lib/utils";
+import type { VendorCheckItemDefinition } from "@/vendors/types";
 
 export interface GuiScreenshotItem {
   id: string; // UploadedFile id
@@ -107,6 +108,36 @@ export function GuiScreenshotUploader({
   const [selectedDevicePreset, setSelectedDevicePreset] = useState<string>(
     devices[0]?.id || ""
   );
+  const [guideChecklist, setGuideChecklist] = useState<{
+    vendor: string;
+    items: VendorCheckItemDefinition[];
+  } | null>(null);
+
+  const guideTaskOptions = vendor === "fortigate"
+    ? DEFAULT_GUI_TASKS.filter((task) => task.value !== "")
+    : guideChecklist?.vendor === vendor
+      ? guideChecklist.items
+          .filter((item) => item.sourceType !== "CLI")
+          .map((item) => ({
+            label: `${item.taskName} (${item.sourceType === "EXTERNAL_REFERENCE" ? "External reference" : "GUI/manual"})`,
+            value: item.id,
+            taskName: item.taskName,
+            checkId: item.id,
+          }))
+      : [];
+
+  useEffect(() => {
+    if (vendor === "fortigate") return;
+    let mounted = true;
+    fetch(`/api/vendors/${vendor}/checklist`)
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || "Failed to load vendor checklist");
+        if (mounted) setGuideChecklist({ vendor, items: data.data.items || [] });
+      })
+      .catch((err) => console.error("Failed to load vendor screenshot tasks:", err));
+    return () => { mounted = false; };
+  }, [vendor]);
 
   // Lightbox preview modal state
   const [previewImage, setPreviewImage] = useState<GuiScreenshotItem | null>(null);
@@ -186,10 +217,13 @@ export function GuiScreenshotUploader({
       setError(null);
       setSuccessMsg(null);
 
-      const targetAppendix = customAppendix !== undefined ? customAppendix : selectedTaskPreset;
+      const selectedTask = guideTaskOptions.find((task) => task.value === selectedTaskPreset);
+      const targetAppendix = vendor === "fortigate"
+        ? customAppendix !== undefined ? customAppendix : selectedTaskPreset
+        : "";
       const targetCheckId = customCheckId !== undefined
         ? customCheckId
-        : (DEFAULT_GUI_TASKS.find((t) => t.value === selectedTaskPreset)?.checkId || "");
+        : (selectedTask?.checkId || "");
       const targetDeviceId = customDeviceId !== undefined
         ? customDeviceId
         : (selectedDevicePreset || (devices[0]?.id || ""));
@@ -232,7 +266,9 @@ export function GuiScreenshotUploader({
         storagePath: uploaded.storagePath,
         deviceId: uploaded.deviceId,
         checkId: uploaded.evidence?.checkId || (targetCheckId || null),
-        appendixMapping: uploaded.evidence?.appendixMapping || (targetAppendix || null),
+        appendixMapping: vendor === "fortigate"
+          ? uploaded.evidence?.appendixMapping || (targetAppendix || null)
+          : null,
         title: uploaded.evidence?.title || uploaded.originalFilename,
         isExcluded: false,
         previewUrl: uploaded.evidence
@@ -290,7 +326,7 @@ export function GuiScreenshotUploader({
         setError("No image data found on clipboard. Please copy a screenshot first.");
       }
     },
-    [isPasteZoneActive, sessionId, devices, selectedTaskPreset, selectedDevicePreset, onEnsureSession]
+    [isPasteZoneActive, sessionId, devices, selectedTaskPreset, selectedDevicePreset, vendor, guideChecklist, onEnsureSession]
   );
 
   useEffect(() => {
@@ -337,27 +373,28 @@ export function GuiScreenshotUploader({
     e.target.value = "";
   };
 
-  // Reassign appendix destination and stable checkId on the fly (Issue 1 & 3)
-  const handleReassignAppendix = async (
+  // Reassign to a verified FortiGate appendix or a guide checklist task.
+  const handleReassignTask = async (
     screenshotId: string,
-    newAppendix: string
+    newTask: string
   ) => {
     if (!sessionId) return;
 
-    const matchedTask = DEFAULT_GUI_TASKS.find((t) => t.value === newAppendix);
+    const matchedTask = guideTaskOptions.find((task) => task.value === newTask);
     const checkId = matchedTask?.checkId || "";
     const title = matchedTask?.taskName || "";
+    const update = {
+      fileId: screenshotId,
+      checkId,
+      title: title || undefined,
+      ...(vendor === "fortigate" ? { appendixMapping: newTask } : {}),
+    };
 
     try {
       const res = await fetch(`/api/sessions/${sessionId}/files`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileId: screenshotId,
-          appendixMapping: newAppendix,
-          checkId,
-          title: title || undefined,
-        }),
+        body: JSON.stringify(update),
       });
 
       const data = await res.json();
@@ -367,7 +404,7 @@ export function GuiScreenshotUploader({
             s.id === screenshotId
               ? {
                   ...s,
-                  appendixMapping: newAppendix,
+                  appendixMapping: vendor === "fortigate" ? newTask : null,
                   checkId,
                   title: title || s.title,
                 }
@@ -466,20 +503,22 @@ export function GuiScreenshotUploader({
               className="rounded border border-slate-700 bg-[#070b14] px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-purple-500 font-medium"
             >
               <option value="">Unassigned (Engineer will map after upload)</option>
-              <optgroup label="Default GUI Tasks">
-                {DEFAULT_GUI_TASKS.filter((t) => t.value !== "").map((opt) => (
+              <optgroup label={vendor === "fortigate" ? "Default GUI Tasks" : "Guide Tasks"}>
+                {guideTaskOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
                   </option>
                 ))}
               </optgroup>
-              <optgroup label="Other Appendices">
-                {OTHER_APPENDIX_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </optgroup>
+              {vendor === "fortigate" && (
+                <optgroup label="Other Appendices">
+                  {OTHER_APPENDIX_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </div>
 
@@ -648,8 +687,8 @@ export function GuiScreenshotUploader({
                         )}
                       </div>
                       <select
-                        value={s.appendixMapping || ""}
-                        onChange={(e) => handleReassignAppendix(s.id, e.target.value)}
+                        value={vendor === "fortigate" ? s.appendixMapping || "" : s.checkId || ""}
+                        onChange={(e) => handleReassignTask(s.id, e.target.value)}
                         className={`w-full rounded border px-2 py-1 text-xs focus:outline-none ${
                           !s.appendixMapping
                             ? "border-amber-500/60 bg-[#070b14] text-amber-300 font-medium"
@@ -657,20 +696,22 @@ export function GuiScreenshotUploader({
                         }`}
                       >
                         <option value="">-- Unassigned (Select PM Task) --</option>
-                        <optgroup label="Default GUI Tasks">
-                          {DEFAULT_GUI_TASKS.filter((t) => t.value !== "").map((opt) => (
+                        <optgroup label={vendor === "fortigate" ? "Default GUI Tasks" : "Guide Tasks"}>
+                          {guideTaskOptions.map((opt) => (
                             <option key={opt.value} value={opt.value}>
                               {opt.label}
                             </option>
                           ))}
                         </optgroup>
-                        <optgroup label="Other Appendices">
-                          {OTHER_APPENDIX_OPTIONS.map((opt) => (
-                            <option key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </optgroup>
+                        {vendor === "fortigate" && (
+                          <optgroup label="Other Appendices">
+                            {OTHER_APPENDIX_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
                       </select>
                     </div>
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { createSessionSchema } from "@/lib/validations/session";
+import { vendorRegistry, VendorId } from "@/vendors";
 
 export async function GET(request: NextRequest) {
   try {
@@ -72,6 +73,13 @@ export async function POST(request: NextRequest) {
 
     const { customer, vendor, engineerName, pmDate, notes, devices } =
       parsed.data;
+
+    if (!vendorRegistry.has(vendor as VendorId)) {
+      return NextResponse.json(
+        { success: false, error: `Unsupported firewall vendor "${vendor}"` },
+        { status: 400 }
+      );
+    }
 
     const session = await prisma.pMSession.create({
       data: {

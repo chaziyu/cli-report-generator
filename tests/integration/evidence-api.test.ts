@@ -11,6 +11,7 @@ describe("CLI Evidence API Integration", () => {
   let sessionId: string;
   let deviceId: string;
   let commandExecutionId: string;
+let checkpointSessionId: string;
 
   afterAll(async () => {
     if (sessionId) {
@@ -20,6 +21,13 @@ describe("CLI Evidence API Integration", () => {
         // ignore
       }
     }
+  if (checkpointSessionId) {
+    try {
+      await prisma.pMSession.delete({ where: { id: checkpointSessionId } });
+    } catch {
+      // ignore
+    }
+  }
   });
 
   it("generates terminal screenshot evidence PNGs from command executions and serves them", async () => {
@@ -118,4 +126,51 @@ none                   8192000    421040   7770960   5% /dev/shm
     expect(buffer[2]).toBe(0x4e); // N
     expect(buffer[3]).toBe(0x47); // G
   });
+
+it("maps one Check Point CLI page to every guide task without inventing an appendix", async () => {
+  const session = await prisma.pMSession.create({
+    data: {
+      customer: "Check Point Evidence Test Customer",
+      vendor: "checkpoint",
+      devices: {
+        create: [{ hostname: "CP-GW-01", model: "Quantum 7000M", role: "Primary" }],
+      },
+    },
+    include: { devices: true },
+  });
+  checkpointSessionId = session.id;
+  const checkpointDeviceId = session.devices[0].id;
+
+  const exec = await prisma.commandExecution.create({
+    data: {
+      deviceId: checkpointDeviceId,
+      command: "show system disk usage",
+      outputContent: "Filesystem                  Size  Used Avail Use% Mounted on\n/dev/mapper/vg_splat-lv_current 10G 4G 6G 40% /var/log",
+      parseStatus: "PARSED",
+    },
+  });
+  const request = new NextRequest(
+    `http://localhost:3000/api/sessions/${checkpointSessionId}/evidence`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId: checkpointDeviceId, commandExecutionId: exec.id }),
+    }
+  );
+
+  const response = await generateEvidenceApi(request, {
+    params: Promise.resolve({ id: checkpointSessionId }),
+  });
+
+  expect(response.status).toBe(200);
+  const evidences = await prisma.evidence.findMany({
+    where: { commandExecutionId: exec.id },
+    select: { checkId: true, appendixMapping: true },
+  });
+  expect(evidences.map((item) => item.checkId).sort()).toEqual([
+    "cp-disk-space",
+    "cp-local-log-storage",
+  ]);
+  expect(evidences.every((item) => item.appendixMapping === "Terminal evidence")).toBe(true);
+});
 });

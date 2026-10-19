@@ -20,9 +20,11 @@ import { generateFortiGateCollectionScript } from "@/vendors/fortigate/commands"
 
 interface CommandCollectorProps {
   commands: VendorCommandDefinition[];
+  vendorId?: string;
+  vendorName?: string;
 }
 
-export function CommandCollector({ commands }: CommandCollectorProps) {
+export function CommandCollector({ commands, vendorId = "fortigate", vendorName = "Fortinet FortiGate" }: CommandCollectorProps) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copiedScript, setCopiedScript] = useState(false);
   const [showScriptPreview, setShowScriptPreview] = useState(false);
@@ -43,7 +45,7 @@ export function CommandCollector({ commands }: CommandCollectorProps) {
     return matchesGroup && matchesSearch;
   });
 
-  const fullScript = generateFortiGateCollectionScript(commands);
+  const fullScript = vendorId === "fortigate" ? generateFortiGateCollectionScript(commands) : "";
 
   const handleCopyCommand = (cmd: VendorCommandDefinition) => {
     navigator.clipboard.writeText(cmd.command);
@@ -66,26 +68,31 @@ export function CommandCollector({ commands }: CommandCollectorProps) {
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-500/20 border border-blue-500/30 px-2.5 py-0.5 text-xs font-semibold text-blue-300">
                 <Terminal className="h-3 w-3 text-blue-400" />
-                PuTTY Collection Script
+                {vendorId === "fortigate" ? "PuTTY Collection Script" : "Individual PuTTY Commands"}
               </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/30 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-300">
-                <ShieldCheck className="h-3 w-3" />
-                100% Read-Only Approved
-              </span>
+              {commands.some((cmd) => !cmd.isReadOnly || cmd.engineerControlled || cmd.contextVerification === "VERIFY_REQUIRED") ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 border border-amber-500/30 px-2.5 py-0.5 text-[11px] font-semibold text-amber-200">
+                  <ShieldCheck className="h-3 w-3" />
+                  Engineer checks required
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/30 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-300">
+                  <ShieldCheck className="h-3 w-3" />
+                  Guide commands
+                </span>
+              )}
             </div>
             <h3 className="text-base font-semibold text-white">
-              Deterministic FortiGate PM CLI Commands
+              {vendorName} PM CLI Commands
             </h3>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Customer logs into the firewall first. Then paste these read-only commands
-              into your PuTTY window with session logging enabled (
+              Customer personnel run each guide command in PuTTY with session logging enabled (
               <span className="text-blue-300 font-mono">Session &gt; Logging &gt; All session output</span>
-              ). Commands include standard console pagination suspension so long outputs
-              flow without manual spacebar keypresses.
+              ). Review execution-context notes and engineer-controlled commands before running them.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          {vendorId === "fortigate" && <div className="flex flex-wrap items-center gap-2.5 shrink-0">
             <Button
               variant="outline"
               size="sm"
@@ -118,11 +125,11 @@ export function CommandCollector({ commands }: CommandCollectorProps) {
                 </>
               )}
             </Button>
-          </div>
+          </div>}
         </div>
 
         {/* Script Preview Drawer */}
-        {showScriptPreview && (
+        {vendorId === "fortigate" && showScriptPreview && (
           <div className="mt-4 pt-4 border-t border-slate-800/80 space-y-2">
             <div className="flex items-center justify-between text-xs text-slate-400">
               <span className="font-mono text-[11px] text-blue-300">
@@ -188,13 +195,18 @@ export function CommandCollector({ commands }: CommandCollectorProps) {
                     <Badge variant="default" className="text-[10px]">
                       {cmd.group}
                     </Badge>
-                    <Badge variant="success" className="text-[10px]">
-                      Read-Only
-                    </Badge>
+                    {cmd.isReadOnly ? (
+                      <Badge variant="success" className="text-[10px]">Read-Only</Badge>
+                    ) : (
+                      <Badge variant="warning" className="text-[10px]">Engineer-Controlled</Badge>
+                    )}
                     {cmd.requiresContext && (
                       <Badge variant="warning" className="text-[10px]">
                         Context Required
                       </Badge>
+                    )}
+                    {cmd.contextVerification === "VERIFY_REQUIRED" && (
+                      <Badge variant="warning" className="text-[10px]">Verify CLI mode</Badge>
                     )}
                   </div>
                   <span className="text-[10px] font-mono text-slate-500">
@@ -276,6 +288,12 @@ export function CommandCollector({ commands }: CommandCollectorProps) {
                   <div className="rounded bg-slate-950/60 border border-slate-800 p-2 text-[11px] text-slate-400 flex items-start gap-1.5">
                     <Info className="h-3.5 w-3.5 text-blue-400 shrink-0 mt-0.5" />
                     <span>{cmd.notes}</span>
+                  </div>
+                )}
+                {cmd.executionContext && (
+                  <div className="rounded bg-slate-950/60 border border-slate-800 p-2 text-[11px] text-slate-300">
+                    Execution context: {cmd.executionContext}
+                    {cmd.contextVerification === "VERIFY_REQUIRED" && " — verify on the target version before use."}
                   </div>
                 )}
               </CardContent>

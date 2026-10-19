@@ -4,7 +4,6 @@ import {
   VendorCheckItemDefinition,
 } from "@/vendors/types";
 import { vendorRegistry } from "@/vendors";
-import { FORTIGATE_RULES } from "@/vendors/fortigate/rules";
 import {
   createMissingResult,
   createNormalizedResult,
@@ -17,6 +16,7 @@ export interface CommandExecutionInput {
   command: string;
   deviceId?: string;
   commandGroup?: string | null;
+  executionContext?: string | null;
   outputContent?: string | null;
   parseStatus?: string | null;
   rawOutputRef?: string | null;
@@ -98,12 +98,14 @@ export class RuleEngine {
     const results: NormalizedCheckResult[] = [];
 
     for (const item of checklistDefinitions) {
-      // Find matching rule handler
-      const ruleHandler =
-        vendorId === "fortigate" ? FORTIGATE_RULES[item.id] : undefined;
+      const ruleHandler = adapter?.getRuleHandler?.(item.id);
 
-      // Check if command execution exists for this checklist item (preserving all observations)
-      let matchedExecutions: CommandExecutionInput[] = [];
+      // Preserve the existing primary-command behavior while retaining observations
+      // from every command referenced by a checklist item.
+      let primaryExecutions: CommandExecutionInput[] = [];
+      const allMatchedExecutions: CommandExecutionInput[] = [];
+      const outputsByCommandId: Record<string, string[]> = {};
+      const executionsByCommandId: Record<string, CommandExecutionInput[]> = {};
       let matchedCommandId: string | undefined;
 
       if (item.commands.length > 0) {
@@ -112,15 +114,21 @@ export class RuleEngine {
           if (cmdDef) {
             const execs = executionsByCommand.get(this.cleanCommand(cmdDef.command));
             if (execs && execs.length > 0) {
-              matchedExecutions = execs;
-              matchedCommandId = cmdId;
-              break;
+              if (!matchedCommandId) {
+                primaryExecutions = execs;
+                matchedCommandId = cmdId;
+              }
+              allMatchedExecutions.push(...execs);
+              executionsByCommandId[cmdId] = execs;
+              outputsByCommandId[cmdId] = execs
+                .map((execution) => execution.outputContent)
+                .filter((output): output is string => Boolean(output));
             }
           }
         }
       }
 
-      const matchedExecution = matchedExecutions[matchedExecutions.length - 1]; // latest or primary observation
+      const matchedExecution = primaryExecutions[primaryExecutions.length - 1];
 
       if (ruleHandler) {
         const metricsEntries = matchedCommandId
@@ -134,13 +142,22 @@ export class RuleEngine {
             : undefined;
 
         const finding = ruleHandler(primaryMetrics, {
-          hasExecution: matchedExecutions.length > 0,
+          hasExecution: allMatchedExecutions.length > 0,
           rawOutput: matchedExecution?.outputContent || undefined,
-          executions: matchedExecutions,
-          allOutputs: matchedExecutions
+          executions: primaryExecutions,
+          allOutputs: primaryExecutions
             .map((e) => e.outputContent)
             .filter((o): o is string => Boolean(o)),
           allMetrics,
+          allExecutions: allMatchedExecutions,
+          executionsByCommandId,
+          outputsByCommandId,
+          metricsByCommandId: Object.fromEntries(
+            item.commands.map((commandId) => [
+              commandId,
+              (parsedMetricsByCommandId.get(commandId) || []).map((entry) => entry.metrics),
+            ])
+          ),
         });
 
         const checkResult = createNormalizedResult({
@@ -158,7 +175,7 @@ export class RuleEngine {
           evaluationStatus: finding.evaluationStatus,
           ruleId: finding.ruleId,
           remarks: finding.remarks,
-          evidenceRefs: matchedExecutions.map((e) => e.id),
+          evidenceRefs: allMatchedExecutions.map((e) => e.id),
           reviewRequired: finding.reviewRequired,
         });
 

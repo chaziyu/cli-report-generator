@@ -82,8 +82,7 @@ export class ReviewService {
     const normEvalStatus = this.normalizeStatus(evaluation.status);
     const normTarget = this.normalizeStatus(targetStatus || evaluation.status);
 
-    const isEvidenceMandatory = Boolean(checkDef.targetAppendix);
-
+    const isEvidenceMandatory = Boolean(checkDef.evidenceRequired || checkDef.targetAppendix || checkDef.sourceType === "CLI");
     // 1. Mandatory evidence check: Requires evidence but collection is MISSING or no evidence exists
     if (isEvidenceMandatory && (!hasEvidence || evaluation.collectionState === "MISSING")) {
       return true;
@@ -130,7 +129,12 @@ export class ReviewService {
     }
 
     const targetStatus = input.finalStatus || evaluation.status;
-    const isEvidenceMandatory = Boolean(checkDef.targetAppendix);
+    const isEvidenceMandatory = Boolean(checkDef.evidenceRequired || checkDef.targetAppendix || checkDef.sourceType === "CLI");
+    const evidenceSource = checkDef.sourceType === "GUI_MANUAL"
+      ? "GUI/manual"
+      : checkDef.sourceType === "EXTERNAL_REFERENCE"
+        ? "external reference"
+        : "CLI";
     const reqJustification = this.checkRequiresJustification(
       checkDef,
       evaluation,
@@ -148,7 +152,7 @@ export class ReviewService {
     ) {
       return {
         isValid: false,
-        error: `Approval for "${checkDef.taskName}" requires an explicit justification/exception record because mandatory CLI evidence is missing.`,
+        error: `Approval for "${checkDef.taskName}" requires an explicit justification/exception record because mandatory ${evidenceSource} evidence is missing.`,
         isException: true,
       };
     }
@@ -541,11 +545,11 @@ export class ReviewService {
 
       let healthStatus: EvidenceHealthStatus = "HEALTHY";
       let healthMessage: string | null = null;
-      const requiresEv = Boolean(def.targetAppendix) || def.sourceType === "CLI";
+      const requiresEv = Boolean(def.evidenceRequired || def.targetAppendix || def.sourceType === "CLI");
 
       if (requiresEv && activeEvidences.length === 0) {
         healthStatus = "MISSING";
-        healthMessage = `Mandatory evidence missing for ${def.targetAppendix || "appendix"}`;
+        healthMessage = `Mandatory evidence missing for ${def.targetAppendix || def.taskName}`;
       } else if (proposedEvaluation.collectionState === "INCOMPLETE") {
         healthStatus = "INCOMPLETE";
         healthMessage = "Telemetry output captured but incomplete for full PM assessment";
@@ -660,7 +664,7 @@ export class ReviewService {
         sourceType: def.sourceType,
         status: proposedEvaluation.status,
         collectionState: proposedEvaluation.collectionState,
-        requiresEvidence: Boolean(def.targetAppendix),
+        requiresEvidence: requiresEv,
         hasEvidence: activeEvidences.length > 0,
         reviewRequired: evalResult?.reviewRequired,
         isDiffFromOriginal: isDiff,
@@ -673,7 +677,7 @@ export class ReviewService {
         sectionName: def.group || docRow?.sectionName || "General",
         targetAppendix: def.targetAppendix || null,
         sourceType: def.sourceType,
-        requiresEvidence: Boolean(def.targetAppendix),
+        requiresEvidence: requiresEv,
         thresholdDescription: def.thresholdDescription || "",
         approvedCommands: def.commands || [],
         originalDocument,
@@ -740,9 +744,10 @@ export class ReviewService {
 
     // 3. Evaluate collection state
     let newCollectionState = result.collectionState;
-    if (def?.sourceType === "GUI_MANUAL") {
+    const requiresEvidence = Boolean(def?.evidenceRequired || def?.targetAppendix || def?.sourceType === "CLI");
+    if (requiresEvidence && (def?.sourceType === "GUI_MANUAL" || def?.sourceType === "EXTERNAL_REFERENCE")) {
       newCollectionState = activeEvidences.length > 0 ? "COMPLETE" : "MISSING";
-    } else if (def?.targetAppendix) {
+    } else if (requiresEvidence) {
       if (activeEvidences.length === 0 && result.collectionState === "COMPLETE") {
         newCollectionState = "INCOMPLETE";
       }
@@ -801,9 +806,7 @@ export class ReviewService {
       reReviewTriggered = true;
     }
 
-    const isMissingMandatory =
-      (Boolean(def?.targetAppendix) || def?.sourceType === "GUI_MANUAL") &&
-      activeEvidences.length === 0;
+    const isMissingMandatory = requiresEvidence && activeEvidences.length === 0;
 
     const reviewRequired =
       reReviewTriggered ||

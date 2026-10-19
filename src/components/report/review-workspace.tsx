@@ -351,7 +351,7 @@ export function ReviewWorkspace({ sessionId }: ReviewWorkspaceProps) {
               Phase 8 · Engineer Review &amp; Approval
             </span>
             <Badge variant="outline" className="text-[10px] text-slate-400">
-              QMS-P09-F01 v1.1
+              {vendorName === "fortigate" ? "QMS-P09-F01 v1.1" : "Vendor PM Guide"}
             </Badge>
             {hasOriginalDoc && (
               <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-0.5 rounded-full flex items-center gap-1 font-mono">
@@ -443,7 +443,7 @@ export function ReviewWorkspace({ sessionId }: ReviewWorkspaceProps) {
               {summary.total}
             </p>
             <span className="text-[10px] text-slate-500">
-              QMS-P09-F01 Items
+              PM Guide Items
             </span>
           </div>
 
@@ -697,7 +697,16 @@ export function ReviewWorkspace({ sessionId }: ReviewWorkspaceProps) {
         <EvidenceModal
           evidence={selectedEvidence.evidence}
           taskName={selectedEvidence.taskName}
+          checkId={selectedEvidence.evidence.checkId || undefined}
+          sessionId={sessionId}
+          devices={allDevices}
+          availableTasks={items.map((item) => ({
+            id: item.checkId,
+            taskName: item.taskName,
+            targetAppendix: item.targetAppendix,
+          }))}
           onClose={() => setSelectedEvidence(null)}
+          onEvidenceUpdated={() => fetchReviewData(selectedDeviceId || undefined)}
         />
       )}
 

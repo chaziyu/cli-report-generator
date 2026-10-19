@@ -53,6 +53,7 @@ export function InlineReviewSection({
   // Review state
   const [items, setItems] = useState<ReviewCheckItem[]>([]);
   const [summary, setSummary] = useState<ReviewSessionSummary | null>(null);
+  const [vendorName, setVendorName] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [engineerName, setEngineerName] = useState(initialEngineerName || "");
   const [hasOriginalDoc, setHasOriginalDoc] = useState(false);
@@ -96,6 +97,7 @@ export function InlineReviewSection({
         const data = json.data;
         setItems(data.items || []);
         setSummary(data.summary || null);
+        setVendorName(data.vendor || "");
         setCustomerName(data.customer || "");
         if (data.engineerName && !engineerName) {
           setEngineerName(data.engineerName);
@@ -351,16 +353,16 @@ export function InlineReviewSection({
                   variant="outline"
                   className="border-emerald-500/40 text-emerald-300 bg-emerald-950/40 text-[10px] font-mono"
                 >
-                  QMS-P09-F01 v1.1
+                  {vendorName === "fortigate" ? "QMS-P09-F01 v1.1" : "Vendor PM Guide"}
                 </Badge>
                 {hasOriginalDoc && (
                   <Badge variant="outline" className="border-blue-500/40 text-blue-300 text-[10px]">
-                    Word Template Linked
+                    Word document uploaded
                   </Badge>
                 )}
               </div>
               <CardDescription className="text-slate-300 text-xs">
-                Review findings inline, resolve exceptions, and approve changes before exporting to the CTC Word report.
+                Review findings, resolve exceptions, and record approval before any supported Word export.
               </CardDescription>
             </div>
 
@@ -593,6 +595,11 @@ export function InlineReviewSection({
           checkId={selectedEvidence.item?.checkId}
           sessionId={sessionId}
           devices={allDevices}
+          availableTasks={items.map((item) => ({
+            id: item.checkId,
+            taskName: item.taskName,
+            targetAppendix: item.targetAppendix,
+          }))}
           onClose={() => setSelectedEvidence(null)}
           onEvidenceUpdated={() => fetchReviewData(selectedDeviceId || undefined)}
         />

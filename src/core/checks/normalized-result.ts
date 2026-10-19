@@ -29,6 +29,7 @@ export const CheckStatusEnum = z.enum([
 export const VendorIdEnum = z.enum([
   "fortigate",
   "paloalto",
+  "juniper_srx",
   "checkpoint",
   "cisco",
   "other",

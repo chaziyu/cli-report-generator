@@ -22,8 +22,6 @@ import { Button } from "@/components/ui/button";
 import { ChecklistTable, ChecklistResultItem } from "./checklist-table";
 import { CommandCollector } from "./command-collector";
 import { MappingMatrix } from "./mapping-matrix";
-import { FORTIGATE_COMMANDS } from "@/vendors/fortigate/commands";
-import { FORTIGATE_CHECKLIST } from "@/vendors/fortigate/checklist";
 import { VendorCheckItemDefinition, VendorCommandDefinition } from "@/vendors/types";
 
 interface DeviceOption {
@@ -36,6 +34,7 @@ interface DeviceOption {
 
 interface ChecklistWorkspaceProps {
   sessionId?: string;
+  vendorId?: string;
   devices?: DeviceOption[];
   initialItems?: VendorCheckItemDefinition[];
   initialCommands?: VendorCommandDefinition[];
@@ -46,13 +45,18 @@ interface ChecklistWorkspaceProps {
 
 export function ChecklistWorkspace({
   sessionId,
+  vendorId = "fortigate",
   devices = [],
-  initialItems = FORTIGATE_CHECKLIST,
-  initialCommands = FORTIGATE_COMMANDS,
+  initialItems,
+  initialCommands,
   customerName,
   vendorName = "Fortinet FortiGate",
   onEvaluationComplete,
 }: ChecklistWorkspaceProps) {
+  const [items, setItems] = useState<VendorCheckItemDefinition[]>(initialItems || []);
+  const [commands, setCommands] = useState<VendorCommandDefinition[]>(initialCommands || []);
+  const [resolvedVendorName, setResolvedVendorName] = useState(vendorName);
+  const [guideLoading, setGuideLoading] = useState(!initialItems || !initialCommands);
   const [activeTab, setActiveTab] = useState<"checklist" | "commands" | "matrix">(
     "checklist"
   );
@@ -64,8 +68,42 @@ export function ChecklistWorkspace({
   const [evalSuccess, setEvalSuccess] = useState<string | null>(null);
   const [resultsMap, setResultsMap] = useState<Record<string, ChecklistResultItem>>({});
 
-  const items = initialItems;
-  const commands = initialCommands;
+  useEffect(() => {
+    let mounted = true;
+    async function loadGuide() {
+      if (initialItems && initialCommands) {
+        setItems(initialItems);
+        setCommands(initialCommands);
+        setGuideLoading(false);
+        return;
+      }
+      setGuideLoading(true);
+      try {
+        const [checklistResponse, commandResponse] = await Promise.all([
+          fetch(`/api/vendors/${vendorId}/checklist`),
+          fetch(`/api/vendors/${vendorId}/commands`),
+        ]);
+        const [checklistData, commandData] = await Promise.all([
+          checklistResponse.json(),
+          commandResponse.json(),
+        ]);
+        if (!checklistResponse.ok || !checklistData.success || !commandResponse.ok || !commandData.success) {
+          throw new Error(checklistData.error || commandData.error || "Failed to load vendor guide");
+        }
+        if (mounted) {
+          setItems(checklistData.data.items || []);
+          setCommands(commandData.data.commands || []);
+          setResolvedVendorName(commandData.data.displayName || vendorName);
+        }
+      } catch (error) {
+        if (mounted) setEvalError(error instanceof Error ? error.message : "Failed to load vendor guide");
+      } finally {
+        if (mounted) setGuideLoading(false);
+      }
+    }
+    void loadGuide();
+    return () => { mounted = false; };
+  }, [vendorId, initialItems, initialCommands, vendorName]);
 
   const currentDevice = devices.find((d) => d.id === selectedDeviceId) || devices[0];
 
@@ -222,6 +260,12 @@ export function ChecklistWorkspace({
         </div>
       )}
 
+      {guideLoading && (
+        <div className="rounded-lg border border-slate-800 bg-[#0c1222] p-3 text-xs text-slate-300">
+          Loading {vendorName} maintenance guide...
+        </div>
+      )}
+
       {/* Metrics & Overview Ribbon */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="rounded-xl border border-slate-800 bg-[#0c1222] p-3.5 space-y-1 shadow-sm">
@@ -353,7 +397,7 @@ export function ChecklistWorkspace({
       )}
 
       {activeTab === "commands" && (
-        <CommandCollector commands={commands} />
+        <CommandCollector commands={commands} vendorId={vendorId} vendorName={resolvedVendorName} />
       )}
 
       {activeTab === "matrix" && (

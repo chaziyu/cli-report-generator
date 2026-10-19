@@ -101,6 +101,9 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
     } else if (inspection && !inspection.isSupportedLayout) {
       warnings.push(`Uploaded document layout (${inspection.layoutName}) is not a verified CTC PM layout.`);
     }
+    if (session.vendor !== "fortigate") {
+      warnings.push(`Word export is unavailable for ${session.vendor}: no approved CTC report layout has been verified for this vendor.`);
+    }
 
     const deviceReadiness = session.devices.map((d) => {
       const totalChecks = d.checklistResults.length;
@@ -181,7 +184,7 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
       success: true,
       data: {
         sessionId,
-        canExport: Boolean(docxFile && (!inspection || inspection.isSupportedLayout)),
+        canExport: session.vendor === "fortigate" && Boolean(docxFile && inspection?.isSupportedLayout),
         hasOriginalDoc: Boolean(docxFile),
         originalDocFilename: docxFile?.originalFilename || null,
         layoutName: inspection?.layoutName || "Unknown",
@@ -239,6 +242,17 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
       return NextResponse.json(
         { success: false, error: "PM session not found" },
         { status: 404 }
+      );
+    }
+
+    if (session.vendor !== "fortigate") {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Word export is unavailable for ${session.vendor}: no approved CTC report layout has been verified for this vendor.`,
+          code: "UNVERIFIED_VENDOR_REPORT_LAYOUT",
+        },
+        { status: 409 }
       );
     }
 

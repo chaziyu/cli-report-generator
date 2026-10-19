@@ -27,6 +27,7 @@ export interface CommandSegment {
   rawCommandLine: string; // original line containing prompt and command
   commandId?: string; // mapped stable ID from vendor definitions (e.g. "cmd-fg-sys-perf")
   hostname: string;
+  executionContext?: string;
   vdom?: string;
   promptChar: string; // "#" or "$"
   outputLines: string[];

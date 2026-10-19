@@ -385,7 +385,7 @@ export function ReviewTable({
                             ) : item.requiresEvidence ? (
                               <div className="text-[11px] text-amber-400 flex items-center gap-1 font-mono pt-1">
                                 <AlertTriangle className="h-3.5 w-3.5" />
-                                Evidence missing for {item.targetAppendix || "appendix"}
+                                Evidence missing for {item.targetAppendix || item.taskName}
                               </div>
                             ) : null}
                           </div>

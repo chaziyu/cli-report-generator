@@ -12,6 +12,7 @@ interface ParsedPromptLine {
   vdom?: string;
   promptChar?: string;
   commandText?: string;
+  executionContext?: string;
   rawLine: string;
 }
 
@@ -60,6 +61,7 @@ export class CommandSegmenter {
         if (currentPrompt) {
           const segment = this.buildSegment({
             prompt: currentPrompt,
+            adapter,
             outputLines: currentOutputLines,
             lineStart: currentLineStart,
             lineEnd: i, // 1-indexed line before this new prompt
@@ -96,6 +98,7 @@ export class CommandSegmenter {
     if (currentPrompt) {
       const segment = this.buildSegment({
         prompt: currentPrompt,
+        adapter,
         outputLines: currentOutputLines,
         lineStart: currentLineStart,
         lineEnd: lines.length,
@@ -151,49 +154,10 @@ export class CommandSegmenter {
 
   /**
    * Parses a line to determine if it is a vendor prompt, optionally with a typed command.
-   * e.g. "FG200F # get system status" -> hostname="FG200F", promptChar="#", commandText="get system status"
+   * The vendor adapter extracts the hostname, prompt, command, and context.
    */
   private parsePromptLine(line: string, adapter: IVendorAdapter): ParsedPromptLine {
-    // FortiGate prompt standard formats:
-    // Hostname #
-    // Hostname (vdom) #
-    // Hostname $
-    // Hostname (vdom) # command args
-    const match = line.match(
-      /^\s*([A-Za-z0-9_\-\.]+)(?:\s*\(([^\)]+)\))?\s*([#$])(?:\s+(.*))?$/
-    );
-
-    if (match) {
-      const hostname = match[1];
-      const vdom = match[2]?.trim();
-      const promptChar = match[3];
-      const commandText = match[4]?.trim();
-
-      return {
-        isPrompt: true,
-        hostname,
-        vdom,
-        promptChar,
-        commandText,
-        rawLine: line,
-      };
-    }
-
-    // Fallback to adapter's native prompt detector
-    const adapterPrompt = adapter.detectPrompt(line);
-    if (adapterPrompt.isPrompt) {
-      return {
-        isPrompt: true,
-        hostname: adapterPrompt.hostname,
-        promptChar: adapterPrompt.promptChar || "#",
-        rawLine: line,
-      };
-    }
-
-    return {
-      isPrompt: false,
-      rawLine: line,
-    };
+    return { ...adapter.detectPrompt(line), rawLine: line };
   }
 
   /**
@@ -201,6 +165,7 @@ export class CommandSegmenter {
    */
   private buildSegment({
     prompt,
+    adapter,
     outputLines,
     lineStart,
     lineEnd,
@@ -209,6 +174,7 @@ export class CommandSegmenter {
     segmentIndex,
   }: {
     prompt: ParsedPromptLine;
+    adapter: IVendorAdapter;
     outputLines: string[];
     lineStart: number;
     lineEnd: number;
@@ -239,7 +205,8 @@ export class CommandSegmenter {
     const { status, errorMessage } = this.evaluateCommandStatus(
       cleanedCommand,
       outputLines,
-      matchedCommandId
+      matchedCommandId,
+      adapter
     );
 
     return {
@@ -248,6 +215,7 @@ export class CommandSegmenter {
       rawCommandLine: prompt.rawLine,
       commandId: matchedCommandId,
       hostname: prompt.hostname || "UNKNOWN",
+      executionContext: prompt.executionContext,
       vdom: prompt.vdom,
       promptChar: prompt.promptChar || "#",
       outputLines,
@@ -268,7 +236,8 @@ export class CommandSegmenter {
   private evaluateCommandStatus(
     command: string,
     outputLines: string[],
-    matchedCommandId?: string
+    matchedCommandId: string | undefined,
+    adapter: IVendorAdapter
   ): { status: CommandSegmentStatus; errorMessage?: string } {
     if (command.trim().length === 0) {
       return { status: "EMPTY" };
@@ -276,22 +245,11 @@ export class CommandSegmenter {
 
     const outputText = outputLines.join("\n");
 
-    // FortiOS error signatures
-    const lowerOutput = outputText.toLowerCase();
-    if (
-      lowerOutput.includes("command parse error") ||
-      lowerOutput.includes("unknown action") ||
-      lowerOutput.includes("node_check_object fail") ||
-      lowerOutput.includes("invalid input detected") ||
-      lowerOutput.includes("incomplete command")
-    ) {
-      // Extract the first error line
-      const errorLine = outputLines.find((l) =>
-        /parse error|unknown|fail|invalid|incomplete/i.test(l)
-      );
+    const vendorError = adapter.detectCommandError?.(outputText);
+    if (vendorError) {
       return {
         status: "FAILED",
-        errorMessage: errorLine?.trim() || "CLI command execution failed.",
+        errorMessage: vendorError,
       };
     }
 

@@ -47,6 +47,7 @@ interface CommandSegmentUI {
   hostname: string;
   vdom?: string;
   promptChar?: string;
+  executionContext?: string;
   outputLines: string[];
   rawOutput: string;
   lineStart: number;
@@ -449,7 +450,7 @@ export function LogImporterWorkspace({
                         </Badge>
                       </div>
 
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
+                      <div className="flex flex-wrap items-center justify-between gap-x-2 text-[11px] text-slate-400 mt-1">
                         <span className="text-slate-500 font-mono text-[10px]">
                           lines {seg.lineStart}-{seg.lineEnd}
                         </span>
@@ -465,6 +466,11 @@ export function LogImporterWorkspace({
                         ) : (
                           <span className="text-slate-500 text-[10px]">Custom</span>
                         )}
+                        {seg.executionContext || parseResult.segmentedLog.detectedVendor === "checkpoint" ? (
+                          <span className="text-violet-300 text-[10px]">
+                            Context: {seg.executionContext || "Not identified"}
+                          </span>
+                        ) : null}
                       </div>
                     </button>
                   );

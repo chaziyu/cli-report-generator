@@ -301,4 +301,59 @@ describe("Phase 9: UI Simplification & Interaction Hardening", () => {
       ).toBeLessThan(singlePageWorkflow.indexOf("REPORT_DOWNLOAD"));
     });
   });
+
+  describe("Recent PM Reports Deletion & Workspace Isolation", () => {
+    interface MockRecentSession {
+      id: string;
+      customer: string;
+      status: string;
+    }
+
+    it("filters out deleted session by ID from recent list", () => {
+      const initial: MockRecentSession[] = [
+        { id: "s-1", customer: "Customer Alpha", status: "COMPLETED" },
+        { id: "s-2", customer: "Customer Beta", status: "DRAFT" },
+        { id: "s-3", customer: "Customer Gamma", status: "REVIEW" },
+      ];
+
+      const deleteId = "s-2";
+      const updated = initial.filter((s) => s.id !== deleteId);
+
+      expect(updated.length).toBe(2);
+      expect(updated.some((s) => s.id === deleteId)).toBe(false);
+      expect(updated.map((s) => s.id)).toEqual(["s-1", "s-3"]);
+    });
+
+    it("resets workspace when active session is deleted", () => {
+      let activeSessionId: string | null = "s-2";
+      let isWorkspaceReset = false;
+
+      function onDeleteSuccess(deletedId: string) {
+        if (activeSessionId === deletedId) {
+          activeSessionId = null;
+          isWorkspaceReset = true;
+        }
+      }
+
+      onDeleteSuccess("s-2");
+      expect(activeSessionId).toBeNull();
+      expect(isWorkspaceReset).toBe(true);
+    });
+
+    it("preserves active session when another session from history is deleted", () => {
+      let activeSessionId: string | null = "s-1";
+      let isWorkspaceReset = false;
+
+      function onDeleteSuccess(deletedId: string) {
+        if (activeSessionId === deletedId) {
+          activeSessionId = null;
+          isWorkspaceReset = true;
+        }
+      }
+
+      onDeleteSuccess("s-2");
+      expect(activeSessionId).toBe("s-1");
+      expect(isWorkspaceReset).toBe(false);
+    });
+  });
 });

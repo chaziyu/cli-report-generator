@@ -4,6 +4,8 @@ import { FORTIGATE_COMMANDS } from "./commands";
 import { FORTIGATE_CHECKLIST } from "./checklist";
 import { fortiGateParser, FortiGateParser } from "./parser";
 import { IVendorParser } from "@/core/checks/types";
+import { FORTIGATE_RULES } from "./rules";
+import { VendorRuleHandler } from "../types";
 
 export * from "./commands";
 export * from "./checklist";
@@ -27,15 +29,30 @@ export class FortiGateVendorAdapter implements IVendorAdapter {
     return fortiGateParser;
   }
 
-  detectPrompt(line: string): { isPrompt: boolean; hostname?: string; promptChar?: string } {
-    // FortiGate prompt standard formats:
-    // Hostname # or Hostname (vdom) # or Hostname $
-    const match = line.match(/^([A-Za-z0-9_\-\.]+)(?:\s*\([^\)]+\))?\s*([#$])\s*$/);
+  getRuleHandler(checkId: string): VendorRuleHandler | undefined {
+    return FORTIGATE_RULES[checkId];
+  }
+
+  detectCommandError(output: string): string | undefined {
+    const errorLine = output
+      .split("\n")
+      .find((line) =>
+        /command parse error|unknown action|node_check_object fail|invalid input detected|incomplete command/i.test(line)
+      );
+    return errorLine?.trim();
+  }
+
+  detectPrompt(line: string) {
+    const match = line.match(
+      /^\s*([A-Za-z0-9_\-\.]+)(?:\s*\(([^\)]+)\))?\s*([#$])(?:\s+(.*))?\s*$/
+    );
     if (match) {
       return {
         isPrompt: true,
         hostname: match[1],
-        promptChar: match[2],
+        vdom: match[2]?.trim(),
+        promptChar: match[3],
+        commandText: match[4]?.trim(),
       };
     }
     return { isPrompt: false };

@@ -118,6 +118,7 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
             deviceId: resolvedDeviceId,
             command: seg.command,
             commandGroup: group || null,
+            executionContext: seg.executionContext || null,
             rawOutputRef: seg.id,
             outputContent: seg.rawOutput,
             parseStatus: seg.commandStatus,
