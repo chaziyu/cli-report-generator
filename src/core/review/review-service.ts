@@ -755,7 +755,7 @@ export class ReviewService {
 
     // 4. Compute updated evidence fingerprint
     const evidencePayload = activeEvidences
-      .map((e) => `${e.id}:${e.uploadedFile?.hashSha256 || e.imageReference}:${e.isExcluded}`)
+      .map((e) => `${e.id}:${e.uploadedFile?.hashSha256 || e.sourceHash || e.imageReference}:${e.isExcluded}`)
       .sort()
       .join("|");
 

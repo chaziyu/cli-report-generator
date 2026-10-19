@@ -76,8 +76,13 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
     if (docxFile) {
       try {
         const fileBuffer = await storage.getFile(docxFile.storagePath);
-        const inspectionResult = await docxInspector.inspectDocument(fileBuffer);
-        docRowTargets = inspectionResult.editableChecklistRows;
+        const inspectionResult = await docxInspector.inspectDocument(
+          fileBuffer,
+          session.vendor as import("@/vendors/types").VendorId
+        );
+        if (inspectionResult.vendorId === session.vendor) {
+          docRowTargets = inspectionResult.editableChecklistRows;
+        }
       } catch (err) {
         console.warn("Could not inspect Word document for review comparison:", err);
       }

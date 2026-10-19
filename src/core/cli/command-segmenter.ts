@@ -199,7 +199,9 @@ export class CommandSegmenter {
 
     // Check for pagination interruptions
     const interruptedByPagination =
-      rawOutput.includes("--More--") || rawOutput.includes("-- More --");
+      rawOutput.includes("--More--") ||
+      rawOutput.includes("-- More --") ||
+      /---\s*\(more/i.test(rawOutput);
 
     // Evaluate command status
     const { status, errorMessage } = this.evaluateCommandStatus(

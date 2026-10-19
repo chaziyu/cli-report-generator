@@ -136,6 +136,7 @@ model Evidence {
   pageNumber         Int               @default(1)
   totalPages         Int               @default(1)
   sourceLabel        String            @default("Rendered from PuTTY session log")
+  sourceHash         String?           // SHA-256 hash of underlying source content
   createdAt          DateTime          @default(now())
 
   @@index([commandExecutionId])

@@ -109,7 +109,9 @@ export function ReportGeneratorWorkspace({
   // Active Session state
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [vendor, setVendor] = useState("fortigate");
-  const [supportedVendors, setSupportedVendors] = useState<Array<{ id: string; displayName: string }>>([]);
+  const [supportedVendors, setSupportedVendors] = useState<Array<{ id: string; displayName: string }>>([
+    { id: "fortigate", displayName: "Fortinet FortiGate" },
+  ]);
   const [vendorLoadError, setVendorLoadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -246,8 +248,7 @@ export function ReportGeneratorWorkspace({
     const logFiles: File[] = [];
     for (const f of files) {
       if (f.name.toLowerCase().endsWith(".docx")) {
-        if (vendor === "fortigate") setStagedDocx(f);
-        else setUploadError("Word export is unavailable for this vendor until an approved CTC report layout is verified.");
+        setStagedDocx(f);
       } else if (
         f.name.toLowerCase().endsWith(".txt") ||
         f.name.toLowerCase().endsWith(".log")
@@ -261,11 +262,6 @@ export function ReportGeneratorWorkspace({
   };
 
   const handleDocxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (vendor !== "fortigate") {
-      setUploadError("Word export is unavailable for this vendor until an approved CTC report layout is verified.");
-      e.target.value = "";
-      return;
-    }
     if (e.target.files && e.target.files[0]) {
       setStagedDocx(e.target.files[0]);
     }
@@ -273,10 +269,6 @@ export function ReportGeneratorWorkspace({
 
   const handleVendorChange = (nextVendor: string) => {
     setVendor(nextVendor);
-    if (nextVendor !== "fortigate" && stagedDocx) {
-      setStagedDocx(null);
-      setUploadError("The staged Word report was cleared because this vendor has no verified CTC layout.");
-    }
   };
 
   const handleLogChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -695,51 +687,60 @@ export function ReportGeneratorWorkspace({
 
   return (
     <div className="mx-auto max-w-6xl px-3 sm:px-6 lg:px-8 py-6 space-y-6 w-full">
-      {/* Workspace Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 border-b border-slate-800">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">
-              PM Report Generator
-            </h1>
-            <span className="rounded-md bg-blue-500/15 px-2.5 py-0.5 text-xs font-semibold text-blue-300 border border-blue-500/30">
-              {supportedVendors.find((item) => item.id === vendor)?.displayName || "Loading vendor adapters"} Guide
-            </span>
+      {/* Vendor Selector & Actions */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-800">
+        <div className="flex flex-wrap items-center gap-3">
+          <label
+            htmlFor="vendor-select"
+            className="flex items-center gap-2 text-sm font-semibold text-slate-200"
+          >
+            <Server className="h-4 w-4 text-blue-400" />
+            <span>Vendor Adapter:</span>
+          </label>
+          <div className="relative">
+            <select
+              id="vendor-select"
+              value={vendor}
+              onChange={(e) => handleVendorChange(e.target.value)}
+              disabled={supportedVendors.length === 0 || Boolean(sessionId)}
+              className="h-10 min-w-[220px] rounded-lg border border-slate-700 bg-[#0c1222] px-3.5 py-2 text-sm font-semibold text-slate-100 shadow-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:opacity-60 disabled:cursor-not-allowed hover:border-slate-600 transition-colors cursor-pointer"
+            >
+              {supportedVendors.map((item) => (
+                <option key={item.id} value={item.id} className="bg-[#070b14] text-white">
+                  {item.displayName}
+                </option>
+              ))}
+            </select>
           </div>
-          <p className="mt-1 text-sm text-slate-300">
-            Follow the selected vendor guide, collect PuTTY logs, and review evidence. Word export is available only for verified CTC layouts.
-          </p>
+          {vendor === "fortigate" && (
+            <span className="rounded-full bg-blue-500/15 border border-blue-500/30 px-2.5 py-0.5 text-xs font-medium text-blue-300">
+              QMS-P09-F01 Verified
+            </span>
+          )}
+          {sessionId && (
+            <span className="text-xs text-slate-400 italic">
+              (Locked to active session)
+            </span>
+          )}
         </div>
 
-        <div className="flex items-center gap-3">
-          {sessionId && (
+        {sessionId && (
+          <div className="flex items-center gap-3">
             <Button
               type="button"
               variant="outline"
               size="sm"
               onClick={startNewSession}
-              className="gap-1.5 border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs h-8"
+              className="gap-1.5 border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs h-9 cursor-pointer"
               title="Clear active workspace to start a new session (existing saved sessions are preserved)"
             >
               <RotateCcw className="h-3.5 w-3.5 text-blue-400" />
               <span>New Session</span>
             </Button>
-          )}
-
-          <label className="text-xs font-medium text-slate-400">Vendor Adapter:</label>
-          <select
-            value={vendor}
-            onChange={(e) => handleVendorChange(e.target.value)}
-            disabled={supportedVendors.length === 0 || Boolean(sessionId)}
-            className="rounded-lg border border-slate-700 bg-[#070b14] px-3 py-1.5 text-xs font-semibold text-slate-100 focus:outline-none focus:border-blue-500"
-          >
-            {supportedVendors.map((item) => (
-              <option key={item.id} value={item.id}>{item.displayName}</option>
-            ))}
-          </select>
-        </div>
-        {vendorLoadError && <p className="text-xs text-rose-300">{vendorLoadError}</p>}
+          </div>
+        )}
       </div>
+      {vendorLoadError && <p className="text-xs text-rose-300">{vendorLoadError}</p>}
 
       {/* CLI Command Reference Section (Phase 2) */}
       <CliCommandSection vendor={vendor} />
@@ -783,7 +784,7 @@ export function ReportGeneratorWorkspace({
               Drag &amp; drop files here, or choose from your computer
             </p>
             <p className="text-xs text-slate-400 mt-1">
-              Supports PuTTY terminal logs (`.txt`, `.log`){vendor === "fortigate" ? " and the verified CTC Word template (.docx)" : ""}
+              Supports PuTTY terminal logs (`.txt`, `.log`) and CTC Word templates (`.docx`)
             </p>
 
             <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
@@ -792,7 +793,6 @@ export function ReportGeneratorWorkspace({
                 type="file"
                 accept=".docx"
                 onChange={handleDocxChange}
-                disabled={vendor !== "fortigate"}
                 className="hidden"
               />
               <Button
@@ -800,11 +800,10 @@ export function ReportGeneratorWorkspace({
                 variant="outline"
                 size="sm"
                 onClick={() => docxInputRef.current?.click()}
-                disabled={vendor !== "fortigate"}
                 className="gap-2 border-slate-700 bg-slate-800 text-slate-200 hover:text-white hover:bg-slate-700"
               >
                 <FileText className="h-4 w-4 text-blue-400" />
-                <span>{vendor === "fortigate" ? "Select Word Report (.docx)" : "Word export unavailable"}</span>
+                <span>Select Word Report (.docx)</span>
               </Button>
 
               <input
@@ -1141,12 +1140,8 @@ export function ReportGeneratorWorkspace({
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                <h3 className="text-base font-semibold text-white">{vendor === "fortigate" ? "Automated PM Report Generation" : "PM Evidence Processing"}</h3>
-                {vendor === "fortigate" ? (
-                  <Badge variant="outline" className="border-emerald-500/40 text-emerald-300 bg-emerald-950/40 text-[10px] font-mono">QMS-P09-F01 v1.1</Badge>
-                ) : (
-                  <Badge variant="outline" className="border-amber-500/40 text-amber-200 bg-amber-950/30 text-[10px]">CLI-only guide workflow</Badge>
-                )}
+                <h3 className="text-base font-semibold text-white">Automated PM Report Generation</h3>
+                <Badge variant="outline" className="border-emerald-500/40 text-emerald-300 bg-emerald-950/40 text-[10px] font-mono">QMS-P09-F01</Badge>
               </div>
               <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
                 Processes the selected vendor checklist, segments PuTTY commands, evaluates supported findings,

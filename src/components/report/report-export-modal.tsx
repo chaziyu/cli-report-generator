@@ -95,12 +95,12 @@ export function ReportExportModal({
               <h3 className="text-base font-semibold text-white">
                 Export Updated CTC Word Report
               </h3>
-              <Badge variant="outline" className="text-[10px] text-blue-300 font-mono">
-                Phase 9 Active
+              <Badge variant="outline" className="text-[10px] text-emerald-300 border-emerald-500/40 bg-emerald-950/40 font-mono">
+                CTC PM
               </Badge>
             </div>
             <p className="text-xs text-slate-400">
-              Apply approved findings and authentic CLI evidence directly into QMS-P09-F01 v1.1.
+              Apply approved findings and authentic CLI evidence directly into the verified CTC Word report.
             </p>
           </div>
 

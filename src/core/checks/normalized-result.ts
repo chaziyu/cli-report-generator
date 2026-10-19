@@ -51,25 +51,35 @@ export const normalizedCheckResultSchema = z
     reviewRequired: z.boolean(),
   })
   .superRefine((val, ctx) => {
-    // Invariant 1: Missing data must NEVER be converted to Pass
-    if (val.collectionState === "MISSING" && val.evaluationStatus === "PASS") {
+    // Invariant 1: Missing data must NEVER evaluate to Pass or NA
+    if (val.collectionState === "MISSING" && (val.evaluationStatus === "PASS" || val.evaluationStatus === "NA")) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "Critical Invariant Violated: Missing data can never evaluate to status PASS.",
+          `Critical Invariant Violated: Missing data can never evaluate to status ${val.evaluationStatus}.`,
         path: ["evaluationStatus"],
       });
     }
 
-    // Invariant 2: Unsupported commands must NEVER evaluate to Pass
+    // Invariant 2: Unsupported commands must NEVER evaluate to Pass or NA
     if (
       val.collectionState === "UNSUPPORTED" &&
-      val.evaluationStatus === "PASS"
+      (val.evaluationStatus === "PASS" || val.evaluationStatus === "NA")
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "Critical Invariant Violated: Unsupported commands can never evaluate to status PASS.",
+          `Critical Invariant Violated: Unsupported commands can never evaluate to status ${val.evaluationStatus}.`,
+        path: ["evaluationStatus"],
+      });
+    }
+
+    // Invariant 3: Incomplete data must NEVER evaluate to Pass
+    if (val.collectionState === "INCOMPLETE" && val.evaluationStatus === "PASS") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Critical Invariant Violated: Incomplete data can never evaluate to status PASS.",
         path: ["evaluationStatus"],
       });
     }

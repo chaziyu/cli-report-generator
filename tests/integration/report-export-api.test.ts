@@ -1,6 +1,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import path from "path";
 import fs from "fs/promises";
+import fsSync from "fs";
 import { prisma } from "@/lib/db/prisma";
 import { storage } from "@/lib/storage";
 import { POST as parseLogApi } from "@/app/api/sessions/[id]/parse-log/route";
@@ -242,5 +243,177 @@ describe("Word Report Editor & Exporter API Integration (Phase 9)", () => {
       where: { id: sessionId },
     });
     expect(updatedSession?.status).toBe("REVIEW");
+  });
+
+  it("rejects export with VENDOR_LAYOUT_MISMATCH when uploaded template belongs to another vendor", async () => {
+    const paSession = await prisma.pMSession.create({
+      data: {
+        customer: "Test PA Customer",
+        vendor: "paloalto",
+        devices: {
+          create: [{ hostname: "PA-FW01", model: "PA-820" }],
+        },
+      },
+      include: { devices: true },
+    });
+
+    try {
+      const fgDocPath = path.join(
+        process.cwd(),
+        "doc",
+        "PM Report_FortiGate 80F_ITOCHU Malaysia_07082025.docx"
+      );
+      if (!fsSync.existsSync(fgDocPath)) return;
+
+      const docxBuffer = await fs.readFile(fgDocPath);
+      const storedDoc = await storage.saveFile(
+        paSession.id,
+        "reports",
+        "PM_Report_FortiGate.docx",
+        docxBuffer,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      );
+
+      await prisma.uploadedFile.create({
+        data: {
+          sessionId: paSession.id,
+          type: "WORD_REPORT",
+          originalFilename: storedDoc.originalFilename,
+          storedFilename: storedDoc.storedFilename,
+          storagePath: storedDoc.storagePath,
+          hashSha256: storedDoc.hashSha256,
+          sizeBytes: storedDoc.sizeBytes,
+          mimeType: storedDoc.mimeType,
+        },
+      });
+
+      const getReq = new NextRequest(
+        `http://localhost:3000/api/sessions/${paSession.id}/export`
+      );
+      const getRes = await getExportApi(getReq, {
+        params: Promise.resolve({ id: paSession.id }),
+      });
+      const getJson = await getRes.json();
+      expect(getJson.data.canExport).toBe(false);
+      expect(getJson.data.warnings.some((w: string) => w.includes("which does not match session vendor paloalto"))).toBe(true);
+
+      const postReq = new NextRequest(
+        `http://localhost:3000/api/sessions/${paSession.id}/export`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceId: paSession.devices[0].id }),
+        }
+      );
+      const postRes = await exportApi(postReq, {
+        params: Promise.resolve({ id: paSession.id }),
+      });
+      expect(postRes.status).toBe(400);
+      const postJson = await postRes.json();
+      expect(postJson.code).toBe("VENDOR_LAYOUT_MISMATCH");
+    } finally {
+      await prisma.pMSession.delete({ where: { id: paSession.id } }).catch(() => {});
+    }
+  });
+
+  it("exports Palo Alto Word report with approved findings and evidence", async () => {
+    const paDocPath = path.join(
+      process.cwd(),
+      "doc",
+      "LFSA_PA-820_PM 2nd half 2026.docx"
+    );
+    if (!fsSync.existsSync(paDocPath)) return;
+
+    const paSession = await prisma.pMSession.create({
+      data: {
+        customer: "LFSA",
+        vendor: "paloalto",
+        engineerName: "Cha Zi Yu",
+        devices: {
+          create: [{ hostname: "klfo-fw", model: "PA-820" }],
+        },
+      },
+      include: { devices: true },
+    });
+
+    const paDeviceId = paSession.devices[0].id;
+
+    try {
+      const docxBuffer = await fs.readFile(paDocPath);
+      const storedDoc = await storage.saveFile(
+        paSession.id,
+        "reports",
+        "LFSA_PA-820_PM.docx",
+        docxBuffer,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      );
+
+      await prisma.uploadedFile.create({
+        data: {
+          sessionId: paSession.id,
+          type: "WORD_REPORT",
+          originalFilename: storedDoc.originalFilename,
+          storedFilename: storedDoc.storedFilename,
+          storagePath: storedDoc.storagePath,
+          hashSha256: storedDoc.hashSha256,
+          sizeBytes: storedDoc.sizeBytes,
+          mimeType: storedDoc.mimeType,
+        },
+      });
+
+      await prisma.checklistResult.create({
+        data: {
+          deviceId: paDeviceId,
+          checkId: "pa-disk-space",
+          checkName: "Hard Disk Space",
+          status: "PASS",
+          collectionState: "COMPLETE",
+          evidenceFingerprint: "fingerprint-pa-disk",
+          reviewRequired: false,
+          reviewDecisions: {
+            create: [
+              {
+                decision: "APPROVED",
+                finalStatus: "PASS",
+                finalRemarks: "Disk usage verified below 90% (observed 78%).",
+                reviewer: "Lead Engineer",
+                evidenceFingerprint: "fingerprint-pa-disk",
+              },
+            ],
+          },
+        },
+      });
+
+      const getReq = new NextRequest(
+        `http://localhost:3000/api/sessions/${paSession.id}/export`
+      );
+      const getRes = await getExportApi(getReq, {
+        params: Promise.resolve({ id: paSession.id }),
+      });
+      const getJson = await getRes.json();
+      expect(getJson.success).toBe(true);
+      expect(getJson.data.canExport).toBe(true);
+      expect(getJson.data.layoutName).toContain("Palo Alto");
+
+      const postReq = new NextRequest(
+        `http://localhost:3000/api/sessions/${paSession.id}/export`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceId: paDeviceId }),
+        }
+      );
+      const postRes = await exportApi(postReq, {
+        params: Promise.resolve({ id: paSession.id }),
+      });
+      expect(postRes.status).toBe(200);
+      const postJson = await postRes.json();
+      expect(postJson.success).toBe(true);
+      expect(postJson.data.reportId).toBeDefined();
+      expect(postJson.data.validation.isValid).toBe(true);
+      expect(postJson.data.changeSummary.appliedRowChanges.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      await prisma.pMSession.delete({ where: { id: paSession.id } }).catch(() => {});
+    }
   });
 });

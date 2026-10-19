@@ -59,8 +59,11 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
     // Read file buffer from storage
     const fileBuffer = await storage.getFile(docxFile.storagePath);
 
-    // Run non-destructive inspection
-    const inspectionResult = await docxInspector.inspectDocument(fileBuffer);
+    // Run non-destructive inspection with session vendor context
+    const inspectionResult = await docxInspector.inspectDocument(
+      fileBuffer,
+      session.vendor as import("@/vendors/types").VendorId
+    );
 
     // If metadata found, optionally enrich session devices if empty
     let updatedDeviceCount = 0;

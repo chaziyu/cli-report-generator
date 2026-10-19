@@ -253,4 +253,47 @@ round-trip min/avg/max = 4.1/4.18/4.3 ms
     );
     expect(unsupportedResult.parseStatus).toBe("UNSUPPORTED");
   });
+
+  it("fails parsing when get system performance status contains no valid metrics", () => {
+    const malformed = `Command failed or returned invalid header`;
+    const result = fortiGateParser.parseCommandOutput("cmd-fg-sys-perf", malformed);
+    expect(result.parseStatus).toBe("FAILED");
+  });
+
+  it("parses standalone mode or unknown HA mode safely", () => {
+    const standaloneRaw = `
+HA Health Status: OK
+Model: FortiGate-200F
+Mode: standalone
+`;
+    const res1 = fortiGateParser.parseCommandOutput("cmd-fg-ha-status", standaloneRaw);
+    expect(res1.parseStatus).toBe("SUCCESS");
+    expect((res1.metrics as HaClusterMetrics).haMode).toBe("STANDALONE");
+
+    const unknownRaw = `
+HA Health Status: Error
+Model: FortiGate-200F
+`;
+    const res2 = fortiGateParser.parseCommandOutput("cmd-fg-ha-status", unknownRaw);
+    expect(res2.parseStatus).toBe("SUCCESS");
+    expect((res2.metrics as HaClusterMetrics).haMode).toBe("UNKNOWN");
+  });
+
+  it("parses FortiAnalyzer unreachable vs unconfigured status", () => {
+    const unconfiguredRaw = `
+FortiAnalyzer status: Not configured
+`;
+    const res1 = fortiGateParser.parseCommandOutput("cmd-fg-faz-test", unconfiguredRaw);
+    expect(res1.parseStatus).toBe("SUCCESS");
+    expect((res1.metrics as LogManagerMetrics).connectionState).toBe("UNCONFIGURED");
+
+    const unreachableRaw = `
+FortiAnalyzer status: Unknown/Unavailable
+IP Address: 10.0.0.10
+Registration: not-registered
+`;
+    const res2 = fortiGateParser.parseCommandOutput("cmd-fg-faz-test", unreachableRaw);
+    expect(res2.parseStatus).toBe("SUCCESS");
+    expect((res2.metrics as LogManagerMetrics).connectionState).toBe("UNREACHABLE");
+  });
 });

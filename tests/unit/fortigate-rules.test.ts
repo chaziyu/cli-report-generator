@@ -451,5 +451,110 @@ describe("FortiGate Deterministic PM Rules", () => {
       expect(res.reviewRequired).toBe(true);
       expect(res.remarks).toContain("errors detected");
     });
+
+    it("evaluates 0 parsed interfaces as REVIEW requiring engineer check", () => {
+      const metrics: InterfaceMetrics = {
+        totalPorts: 0,
+        portsInUse: 0,
+        portsDown: 0,
+        interfaces: [],
+      };
+      const res = rule(metrics, { hasExecution: true });
+      expect(res.evaluationStatus).toBe("REVIEW");
+      expect(res.reviewRequired).toBe(true);
+      expect(res.remarks).toContain("Physical interface metrics could not be parsed");
+    });
+  });
+
+  describe("Rule: fg-sys-uptime (Uptime and reboot detection)", () => {
+    const rule = FORTIGATE_RULES["fg-sys-uptime"];
+
+    it("evaluates recent reboot (< 24 hours) as REVIEW", () => {
+      const metrics = {
+        uptimeSeconds: 3600, // 1 hour
+        uptimeString: "1 hour, 0 minutes",
+      } as PerformanceMetrics;
+      const res = rule(metrics, { hasExecution: true });
+      expect(res.evaluationStatus).toBe("REVIEW");
+      expect(res.reviewRequired).toBe(true);
+      expect(res.remarks).toContain("uptime is short");
+    });
+
+    it("evaluates uptime > 24 hours as PASS", () => {
+      const metrics = {
+        uptimeSeconds: 86400 * 10,
+        uptimeString: "10 days",
+      } as PerformanceMetrics;
+      const res = rule(metrics, { hasExecution: true });
+      expect(res.evaluationStatus).toBe("PASS");
+      expect(res.reviewRequired).toBe(false);
+    });
+  });
+
+  describe("Rule: fg-sys-ha (HA Cluster Status)", () => {
+    const rule = FORTIGATE_RULES["fg-sys-ha"];
+
+    it("evaluates unknown HA mode as REVIEW requiring engineer verification", () => {
+      const metrics: HaClusterMetrics = {
+        haMode: "UNKNOWN",
+        isCluster: false,
+        isSynchronized: false,
+        members: [],
+      };
+      const res = rule(metrics, { hasExecution: true });
+      expect(res.evaluationStatus).toBe("REVIEW");
+      expect(res.reviewRequired).toBe(true);
+      expect(res.remarks).toContain("High Availability mode could not be determined");
+    });
+  });
+
+  describe("Rule: fg-sys-faz (FortiAnalyzer Logging)", () => {
+    const rule = FORTIGATE_RULES["fg-sys-faz"];
+
+    it("evaluates unconfigured FortiAnalyzer as NA", () => {
+      const metrics = { connectionState: "UNCONFIGURED" as const, sslHandshakeOk: false };
+      const res = rule(metrics, { hasExecution: true });
+      expect(res.evaluationStatus).toBe("NA");
+      expect(res.reviewRequired).toBe(false);
+      expect(res.remarks).toContain("not configured");
+    });
+
+    it("evaluates unreachable FortiAnalyzer as FAIL with reviewRequired", () => {
+      const metrics = { connectionState: "UNREACHABLE" as const, targetIp: "10.0.0.1", sslHandshakeOk: false };
+      const res = rule(metrics, { hasExecution: true });
+      expect(res.evaluationStatus).toBe("FAIL");
+      expect(res.reviewRequired).toBe(true);
+      expect(res.remarks).toContain("unreachable");
+    });
+  });
+
+  describe("Rule: fg-sys-log (System Event Logging)", () => {
+    const rule = FORTIGATE_RULES["fg-sys-log"];
+
+    it("evaluates crash/panic keywords as WARNING", () => {
+      const raw = `date=2026-10-10 logid="0100022001" msg="System entered conserve mode"`;
+      const res = rule(undefined, { hasExecution: true, rawOutput: raw });
+      expect(res.evaluationStatus).toBe("WARNING");
+      expect(res.reviewRequired).toBe(true);
+      expect(res.remarks).toContain("Critical system event logs");
+    });
+  });
+
+  describe("Rule: fg-mgmt-cli (CLI Accessibility)", () => {
+    const rule = FORTIGATE_RULES["fg-mgmt-cli"];
+
+    it("evaluates failed command executions as FAIL", () => {
+      const res = rule(undefined, {
+        hasExecution: true,
+        hasFailedExecution: true,
+        executions: [
+          { commandId: "cmd-1", parseStatus: "FAILED" },
+          { commandId: "cmd-2", parseStatus: "FAILED" },
+        ],
+      });
+      expect(res.evaluationStatus).toBe("FAIL");
+      expect(res.reviewRequired).toBe(true);
+      expect(res.remarks).toContain("execution errors");
+    });
   });
 });

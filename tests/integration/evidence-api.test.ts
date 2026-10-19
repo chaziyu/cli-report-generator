@@ -88,6 +88,12 @@ none                   8192000    421040   7770960   5% /dev/shm
     const evidenceId = postJson.data.generatedEvidenceIds[0];
     expect(evidenceId).toBeDefined();
 
+    const storedEvidenceRow = await prisma.evidence.findUnique({
+      where: { id: evidenceId },
+    });
+    expect(storedEvidenceRow?.sourceHash).toBeDefined();
+    expect(storedEvidenceRow?.sourceHash?.length).toBe(64);
+
     // 4. Call GET /api/sessions/[id]/evidence
     const getListReq = new NextRequest(
       `http://localhost:3000/api/sessions/${sessionId}/evidence?deviceId=${deviceId}`

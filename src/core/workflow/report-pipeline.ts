@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import { prisma } from "@/lib/db/prisma";
 import { storage } from "@/lib/storage";
-import { logNormalizer, commandSegmenter, deviceMapper } from "@/core/cli";
+import { logNormalizer, commandSegmenter, deviceMapper, persistCommandSegments } from "@/core/cli";
 import { docxInspector } from "@/core/document";
 import { ruleEngine } from "@/core/checks";
 import { evidenceRenderer } from "@/core/evidence";
@@ -32,6 +32,7 @@ export class ReportPipeline {
     status: string;
     collectionState: string;
     sourceEvidenceIds?: string[];
+    sourceExecutionHashes?: string[];
     rawOutputExcerpt: string;
   }): string {
     const rawNormalized = params.rawOutputExcerpt
@@ -40,6 +41,7 @@ export class ReportPipeline {
       .slice(0, 1000);
 
     const sourceRefs = (params.sourceEvidenceIds || []).slice().sort().join(",");
+    const sourceHashes = (params.sourceExecutionHashes || []).slice().sort().join(",");
 
     const payload = [
       params.deviceId,
@@ -49,6 +51,7 @@ export class ReportPipeline {
       params.status,
       params.collectionState,
       sourceRefs,
+      sourceHashes,
       rawNormalized,
     ].join("|");
 
@@ -204,11 +207,29 @@ export class ReportPipeline {
       for (const logFile of logFiles) {
         try {
           const fileBuffer = await storage.getFile(logFile.storagePath);
+
+          // Validate source SHA-256 before processing
+          const calculatedHash = storage.calculateSha256(fileBuffer);
+          if (calculatedHash !== logFile.hashSha256) {
+            console.error(
+              `Log file ${logFile.originalFilename} integrity check failed: SHA-256 mismatch against recorded hash.`
+            );
+            continue;
+          }
+
           const normalizedLog = logNormalizer.normalize(fileBuffer);
           const segmentedLog = commandSegmenter.segment(normalizedLog, adapter);
 
           // Map log to device
           let resolvedDeviceId = confirmationMap.get(logFile.id);
+
+          // Reject cross-session device confirmations
+          if (resolvedDeviceId && !currentDevices.some((d) => d.id === resolvedDeviceId)) {
+            console.warn(
+              `Device confirmation "${resolvedDeviceId}" does not belong to session "${sessionId}". Rejecting.`
+            );
+            resolvedDeviceId = undefined;
+          }
 
           if (!resolvedDeviceId) {
             const mappingResult = deviceMapper.mapLogToDevice(
@@ -256,69 +277,16 @@ export class ReportPipeline {
             }
           }
 
-          // In-place update / persistence of command executions with stable segment identity
-          const adapterCommands = adapter.getCommands();
-          const cmdGroupMap = new Map(adapterCommands.map((c) => [c.id, c.group]));
-
-          // Find existing executions for this source file to update in place
-          const existingExecs = await prisma.commandExecution.findMany({
-            where: {
-              deviceId: resolvedDeviceId,
-              sourceFileId: logFile.id,
-            },
-            orderBy: { segmentIndex: "asc" },
+          // Idempotently persist command executions and reconcile obsolete segments
+          const persistResult = await persistCommandSegments({
+            sessionId,
+            deviceId: resolvedDeviceId,
+            sourceFileId: logFile.id,
+            segments: segmentedLog.segments,
+            adapter,
           });
 
-          for (let i = 0; i < segmentedLog.segments.length; i++) {
-            const seg = segmentedLog.segments[i];
-            const group = seg.commandId ? cmdGroupMap.get(seg.commandId) : undefined;
-            const existing = existingExecs.find((e) => e.segmentIndex === i);
-
-            if (existing) {
-              const isUnchanged =
-                existing.command === seg.command &&
-                existing.outputContent === seg.rawOutput &&
-                existing.parseStatus === seg.commandStatus;
-
-              if (!isUnchanged) {
-                // Update changed content in place (preserves ID, dependent evidence and decisions)
-                await prisma.commandExecution.update({
-                  where: { id: existing.id },
-                  data: {
-                    command: seg.command,
-                    commandGroup: group || null,
-                    rawOutputRef: seg.id,
-                    outputContent: seg.rawOutput,
-                    parseStatus: seg.commandStatus,
-                    parseError: seg.errorMessage || null,
-                  },
-                });
-              }
-            } else {
-              // Create new segment observation preserving execution order
-              await prisma.commandExecution.create({
-                data: {
-                  deviceId: resolvedDeviceId,
-                  sourceFileId: logFile.id,
-                  segmentIndex: i,
-                  command: seg.command,
-                  commandGroup: group || null,
-                  rawOutputRef: seg.id,
-                  outputContent: seg.rawOutput,
-                  parseStatus: seg.commandStatus,
-                  parseError: seg.errorMessage || null,
-                },
-              });
-            }
-            summary.commandsSegmented++;
-          }
-
-          // Link log file to device
-          await prisma.uploadedFile.update({
-            where: { id: logFile.id },
-            data: { deviceId: resolvedDeviceId },
-          });
-
+          summary.commandsSegmented += persistResult.savedCount;
           summary.logsProcessed++;
           parsedLogFileIds.push(logFile.id);
         } catch (err) {
@@ -388,6 +356,14 @@ export class ReportPipeline {
             def?.thresholdDescription ||
             null;
           const rawExcerpt = currentValue || finding.remarks || "";
+          const matchingExecutions = device.commandExecutions.filter(
+            (e) =>
+              finding.evidenceRefs?.includes(e.id) ||
+              (def?.commands && ((e as any).commandId ? def.commands.includes((e as any).commandId) : def.commands.includes(e.command)))
+          );
+          const sourceExecutionHashes = matchingExecutions.map((e) =>
+            createHash("sha256").update(e.outputContent || "").digest("hex")
+          );
 
           const newFingerprint = this.computeFingerprint({
             deviceId: device.id,
@@ -397,6 +373,7 @@ export class ReportPipeline {
             status: finding.evaluationStatus,
             collectionState: finding.collectionState,
             sourceEvidenceIds: finding.evidenceRefs,
+            sourceExecutionHashes,
             rawOutputExcerpt: rawExcerpt,
           });
 
@@ -533,13 +510,18 @@ export class ReportPipeline {
               ? Array.from(new Set(cmdDef.mappedCheckIds || []))
               : [];
 
-            // Check if existing valid evidence already exists for this execution
+            const currentExecutionHash = createHash("sha256")
+              .update(exec.outputContent || "")
+              .digest("hex");
+
+            // Check if existing valid evidence already exists for this execution with matching content
             const priorEvidence = await prisma.evidence.findMany({
               where: { commandExecutionId: exec.id, isExcluded: false },
             });
 
             let hasValidExistingFiles =
               priorEvidence.length > 0 &&
+              priorEvidence.every((pe) => pe.sourceHash === currentExecutionHash) &&
               (mappedCheckIds.length === 0 || mappedCheckIds.every((checkId) => priorEvidence.some((evidence) => evidence.checkId === checkId)));
             if (hasValidExistingFiles) {
               for (const pe of priorEvidence) {
@@ -626,6 +608,7 @@ export class ReportPipeline {
                   pageNumber: page.pageNumber,
                   totalPages: page.totalPages,
                   sourceLabel: "Rendered from PuTTY session log",
+                  sourceHash: currentExecutionHash,
                   isExcluded: false,
                 },
                 checkIds: evidenceCheckIds,

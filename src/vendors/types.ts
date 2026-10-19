@@ -21,6 +21,7 @@ export interface VendorRuleFinding {
 
 export interface VendorRuleContext {
   hasExecution: boolean;
+  hasFailedExecution?: boolean;
   rawOutput?: string;
   executions?: any[];
   allOutputs?: string[];

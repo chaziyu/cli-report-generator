@@ -3,13 +3,15 @@ import crypto from "crypto";
 import JSZip from "jszip";
 import { reportLayoutRegistry } from "@/report-layouts";
 import { DocumentInspectionResult } from "@/report-layouts/types";
+import { VendorId } from "@/vendors/types";
 
 export class DocxInspector {
   /**
    * Inspects a Word document (.docx) non-destructively, returning a structural map of editable fields.
    */
   async inspectDocument(
-    input: Buffer | Uint8Array | string
+    input: Buffer | Uint8Array | string,
+    preferredVendorId?: VendorId
   ): Promise<DocumentInspectionResult> {
     let buffer: Buffer;
 
@@ -62,7 +64,7 @@ export class DocxInspector {
     );
 
     // 7. Detect layout
-    const layout = reportLayoutRegistry.detectLayout(documentXml, textSummary);
+    const layout = reportLayoutRegistry.detectLayout(documentXml, textSummary, preferredVendorId);
     const warnings: string[] = [];
 
     if (!layout) {
@@ -104,6 +106,12 @@ export class DocxInspector {
 
     if (appendixContainers.length === 0) {
       warnings.push("No appendix containers were detected in document.");
+    }
+
+    if (preferredVendorId && layout.vendorId !== preferredVendorId) {
+      warnings.push(
+        `Uploaded document layout (${layout.name}) belongs to ${layout.vendorId}, which does not match session vendor ${preferredVendorId}.`
+      );
     }
 
     return {

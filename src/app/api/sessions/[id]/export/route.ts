@@ -6,6 +6,7 @@ import { docxEditor, DecisionToApply, EvidenceToInsert } from "@/core/document";
 import { docxInspector } from "@/core/document/docx-inspector";
 import { reviewService } from "@/core/review";
 import { vendorRegistry, VendorId } from "@/vendors";
+import { reportLayoutRegistry } from "@/report-layouts";
 
 export const dynamic = "force-dynamic";
 
@@ -96,13 +97,18 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
     const warnings: string[] = [];
     const errors: string[] = [];
 
+    const hasVendorLayout = reportLayoutRegistry.hasLayoutForVendor(session.vendor as VendorId);
+
     if (!docxFile) {
       errors.push("No CTC Word template (.docx) uploaded for this PM session.");
     } else if (inspection && !inspection.isSupportedLayout) {
       warnings.push(`Uploaded document layout (${inspection.layoutName}) is not a verified CTC PM layout.`);
+    } else if (inspection && inspection.vendorId !== session.vendor) {
+      warnings.push(`Uploaded document layout (${inspection.layoutName}) belongs to ${inspection.vendorId}, which does not match session vendor ${session.vendor}.`);
     }
-    if (session.vendor !== "fortigate") {
-      warnings.push(`Word export is unavailable for ${session.vendor}: no approved CTC report layout has been verified for this vendor.`);
+
+    if (!hasVendorLayout) {
+      warnings.push(`Word export is unavailable for ${session.vendor}: no approved CTC report layout has been registered for this vendor.`);
     }
 
     const deviceReadiness = session.devices.map((d) => {
@@ -184,7 +190,12 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
       success: true,
       data: {
         sessionId,
-        canExport: session.vendor === "fortigate" && Boolean(docxFile && inspection?.isSupportedLayout),
+        canExport: Boolean(
+          hasVendorLayout &&
+          docxFile &&
+          inspection?.isSupportedLayout &&
+          inspection?.vendorId === session.vendor
+        ),
         hasOriginalDoc: Boolean(docxFile),
         originalDocFilename: docxFile?.originalFilename || null,
         layoutName: inspection?.layoutName || "Unknown",
@@ -245,7 +256,8 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
       );
     }
 
-    if (session.vendor !== "fortigate") {
+    const hasVendorLayout = reportLayoutRegistry.hasLayoutForVendor(session.vendor as VendorId);
+    if (!hasVendorLayout) {
       return NextResponse.json(
         {
           success: false,
@@ -276,7 +288,29 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
 
     // 2. Load and inspect original DOCX buffer
     const originalDocxBuffer = await storage.getFile(docxFile.storagePath);
-    const inspection = await docxInspector.inspectDocument(originalDocxBuffer);
+    const inspection = await docxInspector.inspectDocument(originalDocxBuffer, session.vendor as VendorId);
+
+    if (!inspection.isSupportedLayout) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Uploaded document (${docxFile.originalFilename}) does not match an approved CTC report layout for ${session.vendor}.`,
+          code: "UNSUPPORTED_DOCUMENT_LAYOUT",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (inspection.vendorId !== session.vendor) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Uploaded document belongs to ${inspection.vendorId}, which does not match session vendor ${session.vendor}.`,
+          code: "VENDOR_LAYOUT_MISMATCH",
+        },
+        { status: 400 }
+      );
+    }
 
     // 3. Multi-device verification (Correction 2: never silently export only the first device)
     if (session.devices.length > 1 && !targetDeviceId && !inspection.supportsMultiDeviceSections) {

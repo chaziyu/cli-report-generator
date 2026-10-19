@@ -29,7 +29,8 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
     const fileBuffer = await storage.getFile(report.fileReference);
 
     const cleanCustomer = report.session.customer.replace(/[^a-zA-Z0-9_\-]/g, "_");
-    const filename = `PM_Report_${cleanCustomer}_v${report.version}.docx`;
+    const vendorTag = report.session.vendor.toUpperCase();
+    const filename = `PM_Report_${cleanCustomer}_${vendorTag}_v${report.version}.docx`;
 
     return new NextResponse(new Uint8Array(fileBuffer), {
       status: 200,

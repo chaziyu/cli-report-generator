@@ -77,6 +77,15 @@ export class RuleEngine {
       executionsByCommand.set(cleanCmd, list);
 
       if (parser && exec.outputContent) {
+        // Exclude unsuccessful executions from successful metrics
+        const isUnsuccessful =
+          exec.parseStatus === "FAILED" ||
+          exec.parseStatus === "EMPTY" ||
+          exec.parseStatus === "UNSUPPORTED";
+        if (isUnsuccessful) {
+          continue;
+        }
+
         // Try matching against vendor command definitions to find command ID
         const matchedDef = adapter
           ?.getCommands()
@@ -141,8 +150,17 @@ export class RuleEngine {
             ? metricsEntries[metricsEntries.length - 1].metrics
             : undefined;
 
-        const finding = ruleHandler(primaryMetrics, {
-          hasExecution: allMatchedExecutions.length > 0,
+        const hasAnyExecution = allMatchedExecutions.length > 0;
+        const hasSuccessfulExecution = allMatchedExecutions.some(
+          (e) => !e.parseStatus || e.parseStatus === "SUCCESS" || e.parseStatus === "PARSED"
+        );
+        const hasFailedExecution = allMatchedExecutions.some(
+          (e) => e.parseStatus === "FAILED"
+        );
+
+        let finding = ruleHandler(primaryMetrics, {
+          hasExecution: hasSuccessfulExecution,
+          hasFailedExecution,
           rawOutput: matchedExecution?.outputContent || undefined,
           executions: primaryExecutions,
           allOutputs: primaryExecutions
@@ -159,6 +177,20 @@ export class RuleEngine {
             ])
           ),
         });
+
+        // Defensive guard: if execution was attempted but all executions failed,
+        // it must never evaluate to PASS or NA.
+        if (hasAnyExecution && !hasSuccessfulExecution) {
+          if (finding.evaluationStatus === "PASS" || finding.evaluationStatus === "NA") {
+            finding = {
+              ...finding,
+              evaluationStatus: "REVIEW",
+              collectionState: "INCOMPLETE",
+              reviewRequired: true,
+              remarks: `Command execution failed or returned errors. Engineer review required: ${finding.remarks}`,
+            };
+          }
+        }
 
         const checkResult = createNormalizedResult({
           vendorId,

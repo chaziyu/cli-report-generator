@@ -156,7 +156,46 @@ describe("multi-vendor PM guides", () => {
       const tasks = guiEvidenceMapper.getAvailableTasks(vendorId);
       expect(tasks).toHaveLength(vendorRegistry.get(vendorId)!.getChecklistDefinition().length);
       expect(tasks.every((task) => task.checkId.startsWith(vendorId === "juniper_srx" ? "srx-" : vendorId === "paloalto" ? "pa-" : "cp-"))).toBe(true);
-      expect(tasks.some((task) => task.appendixMapping.startsWith("Appendix"))).toBe(false);
+      expect(tasks.some((task) => task.appendixMapping.startsWith("Appendix"))).toBe(true);
     }
+  });
+
+  it("prevents failed or incomplete CLI executions from passing on all vendors", () => {
+    // Palo Alto: disk space with failed parseStatus
+    const paAdapter = vendorRegistry.get("paloalto")!;
+    const paDisk = paAdapter.getRuleHandler!("pa-disk-space")!;
+    const paFailedCtx = {
+      hasExecution: true,
+      executionsByCommandId: { "pa-disk-space": [{ parseStatus: "FAILED" as const }] },
+      outputsByCommandId: { "pa-disk-space": ["error output"] },
+      metricsByCommandId: {},
+    };
+    const paResult = paDisk(undefined, paFailedCtx);
+    expect(paResult.evaluationStatus).toBe("REVIEW");
+    expect(paResult.collectionState).toBe("INCOMPLETE");
+
+    // Check Point: memory with failed parseStatus
+    const cpAdapter = vendorRegistry.get("checkpoint")!;
+    const cpMem = cpAdapter.getRuleHandler!("cp-memory-usage")!;
+    const cpFailedCtx = {
+      hasExecution: true,
+      executionsByCommandId: { "cp-memory": [{ parseStatus: "FAILED" as const, executionContext: "Gaia Clish" }] },
+      outputsByCommandId: { "cp-memory": ["error"] },
+      metricsByCommandId: {},
+    };
+    const cpResult = cpMem(undefined, cpFailedCtx);
+    expect(cpResult.evaluationStatus).toBe("REVIEW");
+    expect(cpResult.collectionState).toBe("INCOMPLETE");
+
+    // Juniper SRX: routing engine with failed parseStatus
+    const srxAdapter = vendorRegistry.get("juniper_srx")!;
+    const srxCpu = srxAdapter.getRuleHandler!("srx-cpu-usage")!;
+    const srxFailedCtx = {
+      hasExecution: true,
+      executions: [{ parseStatus: "FAILED" as const }],
+    };
+    const srxResult = srxCpu(undefined, srxFailedCtx);
+    expect(srxResult.evaluationStatus).toBe("REVIEW");
+    expect(srxResult.collectionState).toBe("INCOMPLETE");
   });
 });

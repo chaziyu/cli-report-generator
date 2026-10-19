@@ -37,22 +37,49 @@ describe("DocxEditor & OOXML Document Manipulation Unit Tests", () => {
     <w:r><w:t> Healthy</w:t></w:r>
   </w:p>
   <w:p>
+    <w:sdt><w:sdtPr><w14:checkbox><w14:checked w14:val="0"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r><w:t>☐</w:t></w:r></w:sdtContent></w:sdt>
+    <w:r><w:t> Unhealthy</w:t></w:r>
+  </w:p>
+  <w:p>
     <w:sdt><w:sdtPr><w14:checkbox><w14:checked w14:val="1"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r><w:t>☒</w:t></w:r></w:sdtContent></w:sdt>
     <w:r><w:t> N/A</w:t></w:r>
   </w:p>
 </w:tc>`;
 
-    // Switch to PASS (Healthy)
+    // Switch to PASS (Healthy) - must check ONLY Healthy, not Unhealthy or N/A
     const passCell = docxEditor.updateStatusCell(sampleCellXml, "PASS");
-    expect(passCell).toContain('<w14:checked w14:val="1"');
-    expect(passCell).toContain("<w:t>☒</w:t>");
-    // N/A should now be unchecked
-    expect(passCell).toContain('<w14:checked w14:val="0"');
+    const checkedMatches = passCell.match(/w14:val="1"/g) || [];
+    expect(checkedMatches.length).toBe(1);
+    expect(passCell).toContain('<w14:checked w14:val="1"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r><w:rPr><w:rFonts w:ascii="MS Gothic" w:eastAsia="MS Gothic" w:hAnsi="MS Gothic"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t>☒</w:t></w:r></w:sdtContent></w:sdt>\n    <w:r><w:t> Healthy</w:t></w:r>');
+
+    // Switch to FAIL (Unhealthy) - must check ONLY Unhealthy
+    const failCell = docxEditor.updateStatusCell(passCell, "FAIL");
+    const failChecked = failCell.match(/w14:val="1"/g) || [];
+    expect(failChecked.length).toBe(1);
+    expect(failCell).toContain('<w14:checked w14:val="1"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r><w:rPr><w:rFonts w:ascii="MS Gothic" w:eastAsia="MS Gothic" w:hAnsi="MS Gothic"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t>☒</w:t></w:r></w:sdtContent></w:sdt>\n    <w:r><w:t> Unhealthy</w:t></w:r>');
 
     // Switch to NA
     const naCell = docxEditor.updateStatusCell(passCell, "NA");
     const countChecked = (naCell.match(/w14:val="1"/g) || []).length;
     expect(countChecked).toBe(1);
+    expect(naCell).toContain('<w14:checked w14:val="1"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r><w:rPr><w:rFonts w:ascii="MS Gothic" w:eastAsia="MS Gothic" w:hAnsi="MS Gothic"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t>☒</w:t></w:r></w:sdtContent></w:sdt>\n    <w:r><w:t> N/A</w:t></w:r>');
+  });
+
+  it("never selects Invalid when target status is PASS for Valid / Invalid options", () => {
+    const validInvalidXml = `<w:tc>
+  <w:p>
+    <w:sdt><w:sdtPr><w14:checkbox><w14:checked w14:val="0"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r><w:t>☐</w:t></w:r></w:sdtContent></w:sdt>
+    <w:r><w:t> Valid</w:t></w:r>
+  </w:p>
+  <w:p>
+    <w:sdt><w:sdtPr><w14:checkbox><w14:checked w14:val="0"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r><w:t>☐</w:t></w:r></w:sdtContent></w:sdt>
+    <w:r><w:t> Invalid / Expired</w:t></w:r>
+  </w:p>
+</w:tc>`;
+
+    const passResult = docxEditor.updateStatusCell(validInvalidXml, "PASS");
+    expect((passResult.match(/w14:val="1"/g) || []).length).toBe(1);
+    expect(passResult).toContain('<w14:checked w14:val="1"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r><w:rPr><w:rFonts w:ascii="MS Gothic" w:eastAsia="MS Gothic" w:hAnsi="MS Gothic"/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t>☒</w:t></w:r></w:sdtContent></w:sdt>\n    <w:r><w:t> Valid</w:t></w:r>');
   });
 
   it("updateRemarksCell replaces remarks text and escapes XML characters safely", () => {

@@ -39,8 +39,15 @@ export class CtcFortiGateLayoutV1_1 implements ReportLayoutDefinition {
       textLower.includes("fortigate") ||
       textLower.includes("fortios") ||
       textLower.includes("fortinet");
+    const hasOtherVendor =
+      textLower.includes("palo alto") ||
+      textLower.includes("pan-os") ||
+      textLower.includes("juniper") ||
+      textLower.includes("junos") ||
+      textLower.includes("checkpoint") ||
+      textLower.includes("check point");
 
-    return hasQmsOrPm && hasFortiGate;
+    return hasQmsOrPm && hasFortiGate && !hasOtherVendor;
   }
 
   /**

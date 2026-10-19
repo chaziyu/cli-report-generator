@@ -139,6 +139,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           imageReference: metadata.storagePath,
           caption: appendixMapping ? `${appendixMapping}: ${title}` : title,
           sourceLabel: "Uploaded GUI screenshot",
+          sourceHash: metadata.hashSha256,
           isExcluded: false,
           pageNumber: 1,
           totalPages: 1,

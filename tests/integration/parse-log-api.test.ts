@@ -132,4 +132,135 @@ describe("PuTTY Log Parsing API Integration", () => {
     });
     expect(updatedFile?.deviceId).toBe(primaryDeviceId);
   });
+
+  it("is idempotent: re-parsing the exact same log file does not duplicate command executions", async () => {
+    const countBefore = await prisma.commandExecution.count({
+      where: { deviceId: primaryDeviceId, sourceFileId: uploadedFileId },
+    });
+
+    const request = new NextRequest(
+      `http://localhost:3000/api/sessions/${sessionId}/parse-log`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          fileId: uploadedFileId,
+        }),
+      }
+    );
+
+    const res = await parseLogApi(request, {
+      params: Promise.resolve({ id: sessionId }),
+    });
+
+    expect(res.status).toBe(200);
+
+    const countAfter = await prisma.commandExecution.count({
+      where: { deviceId: primaryDeviceId, sourceFileId: uploadedFileId },
+    });
+
+    expect(countAfter).toBe(countBefore);
+  });
+
+  it("reconciles obsolete command segments when a shortened replacement log is uploaded and parsed", async () => {
+    // 1. Create a shortened log buffer with only 2 commands
+    const shortenedLog =
+      "FGT200F-HQ-PRI # get system status\n" +
+      "Version: FortiGate-200F v7.4.11\n" +
+      "Serial-Number: FG200FTK21004812\n" +
+      "FGT200F-HQ-PRI # get system performance status\n" +
+      "CPU states: 1% user 2% system 0% nice 97% idle\n";
+
+    const shortenedBuffer = Buffer.from(shortenedLog, "utf-8");
+
+    // Overwrite the existing file in storage with the shortened content
+    const updatedMeta = await storage.saveFile(
+      sessionId,
+      "logs",
+      "fortigate-session-test.log",
+      shortenedBuffer,
+      "text/plain"
+    );
+
+    // Update the record with the new hash, size, and storagePath
+    await prisma.uploadedFile.update({
+      where: { id: uploadedFileId },
+      data: {
+        storagePath: updatedMeta.storagePath,
+        hashSha256: updatedMeta.hashSha256,
+        sizeBytes: updatedMeta.sizeBytes,
+      },
+    });
+
+    // 2. Re-parse
+    const request = new NextRequest(
+      `http://localhost:3000/api/sessions/${sessionId}/parse-log`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          fileId: uploadedFileId,
+        }),
+      }
+    );
+
+    const res = await parseLogApi(request, {
+      params: Promise.resolve({ id: sessionId }),
+    });
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.data.segmentedLog.totalCommands).toBe(2);
+
+    // 3. Verify in database: obsolete segments are deleted, only 2 remain
+    const remainingExecs = await prisma.commandExecution.findMany({
+      where: { deviceId: primaryDeviceId, sourceFileId: uploadedFileId },
+      orderBy: { segmentIndex: "asc" },
+    });
+
+    expect(remainingExecs.length).toBe(2);
+    expect(remainingExecs[0].command).toBe("get system status");
+    expect(remainingExecs[1].command).toBe("get system performance status");
+  });
+
+  it("rejects cross-session device confirmations with HTTP 400", async () => {
+    // Create an unrelated device in a different session
+    const otherSession = await prisma.pMSession.create({
+      data: {
+        customer: "Other Session Customer",
+        vendor: "fortigate",
+        devices: {
+          create: {
+            hostname: "OTHER-DEVICE",
+            model: "FortiGate 100F",
+          },
+        },
+      },
+      include: { devices: true },
+    });
+
+    const foreignDeviceId = otherSession.devices[0].id;
+
+    try {
+      const request = new NextRequest(
+        `http://localhost:3000/api/sessions/${sessionId}/parse-log`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            fileId: uploadedFileId,
+            targetDeviceId: foreignDeviceId,
+          }),
+        }
+      );
+
+      const res = await parseLogApi(request, {
+        params: Promise.resolve({ id: sessionId }),
+      });
+
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.success).toBe(false);
+      expect(json.error).toContain("Cross-session violation");
+    } finally {
+      await prisma.pMSession.delete({ where: { id: otherSession.id } });
+    }
+  });
 });

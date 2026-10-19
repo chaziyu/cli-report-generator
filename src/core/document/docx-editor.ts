@@ -401,32 +401,60 @@ export class DocxEditor {
   }
 
   private optionMatchesStatus(optionLabel: string, targetStatus: string): boolean {
-    if (targetStatus === "PASS") {
-      return (
-        optionLabel.includes("HEALTHY") ||
-        optionLabel.includes("VALID") ||
-        optionLabel.includes("UP TO DATE") ||
-        optionLabel.includes("PASS") ||
-        optionLabel.includes("YES")
-      );
-    }
-    if (targetStatus === "FAIL") {
-      return (
-        optionLabel.includes("UNHEALTHY") ||
-        optionLabel.includes("EXPIRED") ||
-        optionLabel.includes("OUT-OF-DATE") ||
-        optionLabel.includes("FAIL") ||
-        optionLabel.includes("NO")
-      );
-    }
+    const cleaned = optionLabel.trim().toUpperCase();
+
+    // Check NA first
+    const isNaOption =
+      cleaned === "N/A" ||
+      cleaned === "NA" ||
+      cleaned.includes("NOT APPLICABLE") ||
+      cleaned.includes("NOT APPLY");
+
     if (targetStatus === "NA") {
+      return isNaOption;
+    }
+
+    if (isNaOption) {
+      return false;
+    }
+
+    // Check FAIL / Unhealthy / Expired / Invalid / Out-of-date / Unavailable / Inactive / No
+    const isFailOption =
+      cleaned.includes("UNHEALTHY") ||
+      cleaned.includes("EXPIRED") ||
+      cleaned.includes("INVALID") ||
+      cleaned.includes("OUT-OF-DATE") ||
+      cleaned.includes("OUT OF DATE") ||
+      cleaned.includes("UNAVAILABLE") ||
+      cleaned.includes("INACTIVE") ||
+      cleaned.includes("FAIL") ||
+      cleaned.includes("FAILED") ||
+      cleaned === "NO" ||
+      cleaned.startsWith("NO ") ||
+      cleaned.endsWith(" NO");
+
+    if (targetStatus === "FAIL") {
+      return isFailOption;
+    }
+
+    // PASS / Healthy / Valid / Up-to-date / Available / Active / Yes
+    if (targetStatus === "PASS") {
+      if (isFailOption) return false;
       return (
-        optionLabel.includes("N/A") ||
-        optionLabel.includes("NA") ||
-        optionLabel.includes("NOT APPLICABLE") ||
-        optionLabel.includes("NOT APPLY")
+        cleaned.includes("HEALTHY") ||
+        cleaned.includes("VALID") ||
+        cleaned.includes("UP-TO-DATE") ||
+        cleaned.includes("UP TO DATE") ||
+        cleaned.includes("AVAILABLE") ||
+        cleaned.includes("ACTIVE") ||
+        cleaned.includes("PASS") ||
+        cleaned.includes("PASSED") ||
+        cleaned === "YES" ||
+        cleaned.startsWith("YES ") ||
+        cleaned.endsWith(" YES")
       );
     }
+
     return false;
   }
 

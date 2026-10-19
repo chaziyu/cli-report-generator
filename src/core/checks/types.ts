@@ -29,6 +29,8 @@ export interface PerformanceMetrics {
   uptimeString?: string;
   isHistoricalAverage?: boolean;
   measurementPeriod?: string;
+  isCpuParsed?: boolean;
+  isMemoryParsed?: boolean;
 }
 
 export interface DiskPartitionMetric {

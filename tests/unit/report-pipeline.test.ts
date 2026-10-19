@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { prisma } from "@/lib/db/prisma";
 import { storage } from "@/lib/storage";
@@ -152,10 +153,14 @@ describe("ReportPipeline (Deterministic Processing Pipeline)", () => {
         "text/plain"
       );
 
-      // Update uploaded file storage path
+      // Update uploaded file storage path and integrity hash
       await prisma.uploadedFile.update({
         where: { id: sourceFileId },
-        data: { storagePath: stored.storagePath },
+        data: {
+          storagePath: stored.storagePath,
+          hashSha256: stored.hashSha256,
+          sizeBytes: stored.sizeBytes,
+        },
       });
 
       // 3. Run pipeline
@@ -202,13 +207,14 @@ describe("ReportPipeline (Deterministic Processing Pipeline)", () => {
         "image/png"
       );
 
-      // Attach evidence to this execution
+      // Attach evidence to this execution with matching content hash
       const evidence = await prisma.evidence.create({
         data: {
           commandExecutionId: initialExec.id,
           deviceId,
           title: "System Status",
           imageReference: storedEvImage.storagePath,
+          sourceHash: createHash("sha256").update("Version: FortiGate-200F v7.2.5").digest("hex"),
           isExcluded: false,
         },
       });
@@ -224,7 +230,11 @@ describe("ReportPipeline (Deterministic Processing Pipeline)", () => {
       );
       await prisma.uploadedFile.update({
         where: { id: sourceFileId },
-        data: { storagePath: storedLog.storagePath },
+        data: {
+          storagePath: storedLog.storagePath,
+          hashSha256: storedLog.hashSha256,
+          sizeBytes: storedLog.sizeBytes,
+        },
       });
 
       await reportPipeline.processSession(sessionId);
@@ -240,6 +250,72 @@ describe("ReportPipeline (Deterministic Processing Pipeline)", () => {
       });
       expect(currentEvidence?.commandExecutionId).toBe(initialExec.id);
     });
+
+    it("reuses valid evidence when output is unchanged and regenerates when output changes", async () => {
+      // 1. Initial processing run
+      const log1 = `FW-CORP-PRI # get system status\nVersion: FortiGate-200F v7.2.5\n`;
+      const stored1 = await storage.saveFile(
+        sessionId,
+        "logs",
+        "putty_session.txt",
+        Buffer.from(log1, "utf8"),
+        "text/plain"
+      );
+      await prisma.uploadedFile.update({
+        where: { id: sourceFileId },
+        data: {
+          storagePath: stored1.storagePath,
+          hashSha256: stored1.hashSha256,
+          sizeBytes: stored1.sizeBytes,
+        },
+      });
+
+      await reportPipeline.processSession(sessionId);
+
+      const ev1 = await prisma.evidence.findMany({
+        where: { deviceId },
+      });
+      expect(ev1.length).toBeGreaterThan(0);
+      const ev1Ids = ev1.map((e) => e.id);
+      const ev1Hash = ev1[0].sourceHash;
+      expect(ev1Hash).toBeDefined();
+
+      // 2. Re-run with identical output: should reuse evidence
+      await reportPipeline.processSession(sessionId);
+
+      const ev2 = await prisma.evidence.findMany({
+        where: { deviceId },
+      });
+      const ev2Ids = ev2.map((e) => e.id);
+      expect(ev2Ids).toEqual(ev1Ids);
+
+      // 3. Re-run with changed output: should regenerate evidence
+      const log2 = `FW-CORP-PRI # get system status\nVersion: FortiGate-200F v7.4.2\n`;
+      const stored2 = await storage.saveFile(
+        sessionId,
+        "logs",
+        "putty_session.txt",
+        Buffer.from(log2, "utf8"),
+        "text/plain"
+      );
+      await prisma.uploadedFile.update({
+        where: { id: sourceFileId },
+        data: {
+          storagePath: stored2.storagePath,
+          hashSha256: stored2.hashSha256,
+          sizeBytes: stored2.sizeBytes,
+        },
+      });
+
+      await reportPipeline.processSession(sessionId);
+
+      const ev3 = await prisma.evidence.findMany({
+        where: { deviceId },
+      });
+      expect(ev3.length).toBeGreaterThan(0);
+      expect(ev3[0].id).not.toBe(ev1[0].id);
+      expect(ev3[0].sourceHash).not.toBe(ev1Hash);
+    });
   });
 
   describe("Partial Inputs & Fallback Modes", () => {
@@ -254,7 +330,11 @@ describe("ReportPipeline (Deterministic Processing Pipeline)", () => {
       );
       await prisma.uploadedFile.update({
         where: { id: sourceFileId },
-        data: { storagePath: storedLog.storagePath },
+        data: {
+          storagePath: storedLog.storagePath,
+          hashSha256: storedLog.hashSha256,
+          sizeBytes: storedLog.sizeBytes,
+        },
       });
 
       const result = await reportPipeline.processSession(sessionId);

@@ -19,11 +19,12 @@ const PUTTY_BANNER_REGEX =
   /^=~=~=~=~=~=~=~=~=~=~=~= PuTTY log .* =~=~=~=~=~=~=~=~=~=~=$/;
 
 /**
- * FortiGate / standard terminal pagination markers:
- * e.g. "--More--", "--More-- ", "--More-- (page 1)"
+ * Multi-vendor terminal pagination markers:
+ * - FortiGate / Check Point / PAN-OS: "--More--", "--More-- ", "--More-- (page 1)"
+ * - Juniper SRX Junos: "---(more)---", "---(more 12%)---"
  */
 const PAGINATION_MARKER_REGEX =
-  /--\s*More\s*--(?:[ \t]*(?:\(page\s+\d+\))?)?/gi;
+  /(?:--\s*More\s*--(?:[ \t]*(?:\(page\s+\d+\))?)?|---\s*\(more(?:\s+\d+%)?\)\s*---+)/gi;
 
 export class LogNormalizer {
   /**
@@ -95,10 +96,13 @@ export class LogNormalizer {
       } else {
         // Clean out terminal pagination artifacts on a line if standalone
         const isStandalonePagination =
-          line.trim().match(/^--\s*More\s*--$/i) !== null;
+          line.trim().match(/^(?:--\s*More\s*--(?:[ \t]*(?:\(page\s+\d+\))?)?|---\s*\(more(?:\s+\d+%)?\)\s*---+)$/i) !== null;
         if (!isStandalonePagination) {
-          // Remove inline pagination prompts like "--More-- " at line boundaries
-          const cleanedLine = line.replace(/--\s*More\s*--/gi, "").trimEnd();
+          // Remove inline pagination prompts like "--More-- " or "---(more 12%)---" at line boundaries
+          const cleanedLine = line
+            .replace(/--\s*More\s*--(?:[ \t]*(?:\(page\s+\d+\))?)?/gi, "")
+            .replace(/---\s*\(more(?:\s+\d+%)?\)\s*---+/gi, "")
+            .trimEnd();
           lines.push(cleanedLine);
         }
       }

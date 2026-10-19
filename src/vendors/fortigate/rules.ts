@@ -107,6 +107,20 @@ export const FORTIGATE_RULES: Record<string, FortiGateRuleHandler> = {
         ? (ctx.allMetrics as PerformanceMetrics[])
         : [metrics as PerformanceMetrics];
 
+    // Check if CPU states could not be parsed from output
+    if (perfList.every((p) => p.isCpuParsed === false)) {
+      return {
+        ruleId: "rule-fg-cpu-unparsed",
+        collectionState: "INCOMPLETE",
+        evaluationStatus: "REVIEW",
+        currentValue: "Unparsed",
+        expectedValue: "Average CPU < 80% for past 1 hour",
+        remarks:
+          "CPU states could not be parsed from performance status output. Engineer review required. Refer Appendix 1",
+        reviewRequired: true,
+      };
+    }
+
     // Check if any observation exceeds threshold (fail boundary)
     const failingPerf = perfList.find((p) => p.totalCpuUtilizationPct >= 80);
     if (failingPerf) {
@@ -186,6 +200,20 @@ export const FORTIGATE_RULES: Record<string, FortiGateRuleHandler> = {
         ? (ctx.allMetrics as PerformanceMetrics[])
         : [metrics as PerformanceMetrics];
 
+    // Check if memory utilization could not be parsed from output
+    if (perfList.every((p) => p.isMemoryParsed === false)) {
+      return {
+        ruleId: "rule-fg-mem-unparsed",
+        collectionState: "INCOMPLETE",
+        evaluationStatus: "REVIEW",
+        currentValue: "Unparsed",
+        expectedValue: "Memory usage < 80% for past 1 hour",
+        remarks:
+          "Memory usage percentage could not be parsed from performance status output. Engineer review required. Refer Appendix 2",
+        reviewRequired: true,
+      };
+    }
+
     // Check if any observation exceeds threshold (fail boundary)
     const failingPerf = perfList.find((p) => p.memoryUtilizationPct >= 80);
     if (failingPerf) {
@@ -261,6 +289,19 @@ export const FORTIGATE_RULES: Record<string, FortiGateRuleHandler> = {
     }
 
     const intf = metrics as InterfaceMetrics;
+    if (!intf.interfaces || intf.interfaces.length === 0) {
+      return {
+        ruleId: "rule-fg-intf-unknown",
+        collectionState: "INCOMPLETE",
+        evaluationStatus: "REVIEW",
+        currentValue: "No interfaces parsed",
+        expectedValue: "Physical ports UP, 0 errors",
+        remarks:
+          "Physical interface metrics could not be parsed from command output. Engineer review required. Refer Appendix 3",
+        reviewRequired: true,
+      };
+    }
+
     const hasErrors = intf.interfaces.some(
       (i) => (i.txErrors && i.txErrors > 0) || (i.rxErrors && i.rxErrors > 0)
     );
@@ -594,6 +635,32 @@ export const FORTIGATE_RULES: Record<string, FortiGateRuleHandler> = {
     const perf = metrics as PerformanceMetrics;
     const uptimeStr = perf.uptimeString || "Unknown";
 
+    if (uptimeStr === "Unknown" || !perf.uptimeSeconds) {
+      return {
+        ruleId: "rule-fg-uptime-unknown",
+        collectionState: "INCOMPLETE",
+        evaluationStatus: "REVIEW",
+        currentValue: "Unknown",
+        expectedValue: "Stable uptime with no unexpected reboots",
+        remarks:
+          "Firewall system uptime could not be verified from performance output. Engineer review required. Refer Appendix 8",
+        reviewRequired: true,
+      };
+    }
+
+    // Low uptime (< 1 day / 86400 seconds) indicates recent reboot requiring review
+    if (perf.uptimeSeconds < 86400) {
+      return {
+        ruleId: "rule-fg-uptime-recent",
+        collectionState: "COMPLETE",
+        evaluationStatus: "REVIEW",
+        currentValue: `Recent reboot (Uptime: ${uptimeStr})`,
+        expectedValue: "Stable uptime with no unexpected reboots",
+        remarks: `Firewall system uptime is short (${uptimeStr}). Verify whether this reboot was scheduled or unexpected. Refer Appendix 8`,
+        reviewRequired: true,
+      };
+    }
+
     return {
       ruleId: "rule-fg-uptime-pass",
       collectionState: "COMPLETE",
@@ -619,7 +686,7 @@ export const FORTIGATE_RULES: Record<string, FortiGateRuleHandler> = {
 
   // 6.3 Accessibility via CLI
   "fg-mgmt-cli": (_metrics, ctx) => {
-    if (ctx?.hasExecution) {
+    if (ctx?.hasExecution && !ctx?.hasFailedExecution) {
       return {
         ruleId: "rule-fg-cli-pass",
         collectionState: "COMPLETE",
@@ -629,6 +696,18 @@ export const FORTIGATE_RULES: Record<string, FortiGateRuleHandler> = {
         remarks:
           "Firewall accessibility via SSH CLI verified with authorized credentials. Refer Appendix 10",
         reviewRequired: false,
+      };
+    }
+
+    if (ctx?.hasFailedExecution) {
+      return {
+        ruleId: "rule-fg-cli-fail",
+        collectionState: "COMPLETE",
+        evaluationStatus: "FAIL",
+        currentValue: "CLI Command Error",
+        expectedValue: "Firewall accessible via SSH",
+        remarks: "CLI commands returned execution errors in session log. Refer Appendix 10",
+        reviewRequired: true,
       };
     }
 
@@ -659,16 +738,29 @@ export const FORTIGATE_RULES: Record<string, FortiGateRuleHandler> = {
     }
 
     const sig = metrics as SignaturesMetrics;
-    const avVer = sig.avDefinitionsVersion || "Active";
-    const ipsVer = sig.ipsDefinitionsVersion || "Active";
+    const avVer = sig.avDefinitionsVersion;
+    const ipsVer = sig.ipsDefinitionsVersion;
+
+    if (!avVer && !ipsVer && !sig.appDefinitionsVersion) {
+      return {
+        ruleId: "rule-fg-sig-unknown",
+        collectionState: "INCOMPLETE",
+        evaluationStatus: "REVIEW",
+        currentValue: "Unknown / Unparsed",
+        expectedValue: "Signatures (AV, IPS, App Control) up to date",
+        remarks:
+          "Security signatures could not be parsed from autoupdate versions output. Manual review required. Refer Appendix 11",
+        reviewRequired: true,
+      };
+    }
 
     return {
       ruleId: "rule-fg-sig-pass",
       collectionState: "COMPLETE",
       evaluationStatus: "PASS",
-      currentValue: `AV: ${avVer} | IPS: ${ipsVer}`,
+      currentValue: `AV: ${avVer || "Active"} | IPS: ${ipsVer || "Active"}`,
       expectedValue: "Signatures (AV, IPS, App Control) up to date",
-      remarks: `Security signatures (Antivirus: ${avVer}, IPS: ${ipsVer}) are up-to-date and actively refreshing. Refer Appendix 11`,
+      remarks: `Security signatures (Antivirus: ${avVer || "Active"}, IPS: ${ipsVer || "Active"}) are up-to-date and actively refreshing. Refer Appendix 11`,
       reviewRequired: false,
     };
   },
@@ -770,6 +862,19 @@ export const FORTIGATE_RULES: Record<string, FortiGateRuleHandler> = {
 
     const ha = metrics as HaClusterMetrics;
 
+    if (ha.haMode === "UNKNOWN") {
+      return {
+        ruleId: "rule-fg-ha-unknown",
+        collectionState: "INCOMPLETE",
+        evaluationStatus: "REVIEW",
+        currentValue: "Unknown HA state",
+        expectedValue: "HA cluster members in-sync or Standalone",
+        remarks:
+          "High Availability mode could not be determined reliably from CLI output. Engineer review required. Refer Appendix 13",
+        reviewRequired: true,
+      };
+    }
+
     if (!ha.isCluster || ha.haMode === "STANDALONE") {
       return {
         ruleId: "rule-fg-ha-standalone",
@@ -809,6 +914,25 @@ export const FORTIGATE_RULES: Record<string, FortiGateRuleHandler> = {
   // 6.8 Logging (Event Log)
   "fg-sys-log": (_metrics, ctx) => {
     if (ctx?.hasExecution) {
+      const output = (ctx.rawOutput || "").toLowerCase();
+      const hasCriticalIssues =
+        /kernel panic|kernel crash|conserve mode|system is in conserve mode|failed memory alloc|fatal error/i.test(
+          output
+        );
+
+      if (hasCriticalIssues) {
+        return {
+          ruleId: "rule-fg-log-critical",
+          collectionState: "COMPLETE",
+          evaluationStatus: "WARNING",
+          currentValue: "Critical log events detected",
+          expectedValue: "Logging available, no critical crashes",
+          remarks:
+            "Critical system event logs (e.g. crash, conserve mode, or fatal error) detected. Investigation required. Refer Appendix 15",
+          reviewRequired: true,
+        };
+      }
+
       return {
         ruleId: "rule-fg-log-pass",
         collectionState: "COMPLETE",
@@ -861,15 +985,28 @@ export const FORTIGATE_RULES: Record<string, FortiGateRuleHandler> = {
       };
     }
 
+    if (faz.connectionState === "UNCONFIGURED") {
+      return {
+        ruleId: "rule-fg-faz-na",
+        collectionState: "COMPLETE",
+        evaluationStatus: "NA",
+        currentValue: "N/A",
+        expectedValue: "Connected to FortiAnalyzer or N/A",
+        remarks:
+          "FortiAnalyzer is not configured or not utilized in customer environment. Refer Appendix 16",
+        reviewRequired: false,
+      };
+    }
+
+    // UNREACHABLE connection failure
     return {
-      ruleId: "rule-fg-faz-na",
+      ruleId: "rule-fg-faz-fail",
       collectionState: "COMPLETE",
-      evaluationStatus: "NA",
-      currentValue: "N/A",
+      evaluationStatus: "FAIL",
+      currentValue: `Unreachable (${faz.targetIp || "FortiAnalyzer"})`,
       expectedValue: "Connected to FortiAnalyzer or N/A",
-      remarks:
-        "FortiAnalyzer is not configured or not utilized in customer environment. Refer Appendix 16",
-      reviewRequired: false,
+      remarks: `FortiAnalyzer at ${faz.targetIp || "target"} is unreachable or TLS handshake failed. Connection investigation required. Refer Appendix 16`,
+      reviewRequired: true,
     };
   },
 

@@ -1,7 +1,9 @@
+import { createHash } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { vendorRegistry, VendorId } from "@/vendors";
 import { evidenceRenderer } from "@/core/evidence";
+import { reviewService } from "@/core/review";
 import { storage } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
@@ -207,6 +209,10 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
           where: { commandExecutionId: exec.id },
         });
 
+        const currentExecutionHash = createHash("sha256")
+          .update(exec.outputContent || "")
+          .digest("hex");
+
         // Store each page PNG and persist Evidence row
         for (const page of pages) {
           const stored = await storage.saveFile(
@@ -231,9 +237,19 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
                 pageNumber: page.pageNumber,
                 totalPages: page.totalPages,
                 sourceLabel: "Rendered from PuTTY session log",
+                sourceHash: currentExecutionHash,
               },
             });
             generatedEvidenceIds.push(evidenceRow.id);
+
+            if (checkId) {
+              await reviewService.recalculateFindingEvidenceState(
+                sessionId,
+                device.id,
+                checkId,
+                "CLI evidence regenerated."
+              );
+            }
           }
           totalImagesGenerated++;
         }

@@ -165,7 +165,7 @@ export function ReportDownloadSection({
               <span>Download Updated Word Report (.docx)</span>
             </CardTitle>
             <CardDescription className="text-xs text-slate-300">
-              Applies only current engineer-approved findings and verified evidence into CTC QMS-P09-F01 v1.1.
+              Applies only current engineer-approved findings and verified evidence into the CTC PM report.
             </CardDescription>
           </div>
 

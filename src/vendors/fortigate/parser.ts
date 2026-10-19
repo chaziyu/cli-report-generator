@@ -158,6 +158,7 @@ export class FortiGateParser implements IVendorParser {
       /CPU states:\s*(\d+)%\s*user\s*(\d+)%\s*system\s*(\d+)%\s*nice\s*(\d+)%\s*idle/i
     );
 
+    const isCpuParsed = Boolean(cpuMatch);
     let cpuUserPct = 0;
     let cpuSystemPct = 0;
     let cpuIdlePct = 100;
@@ -175,6 +176,7 @@ export class FortiGateParser implements IVendorParser {
       /Memory:\s*(\d+)k\s*total,\s*(\d+)k\s*used\s*\((\d+)%\)/i
     );
 
+    const isMemoryParsed = Boolean(memMatch);
     let memoryTotalBytes = 0;
     let memoryUsedBytes = 0;
     let memoryFreeBytes = 0;
@@ -198,6 +200,10 @@ export class FortiGateParser implements IVendorParser {
     const uptimeString = uptimeMatch ? uptimeMatch[1].trim() : undefined;
     const uptimeSeconds = uptimeString ? this.parseUptimeToSeconds(uptimeString) : undefined;
 
+    if (!isCpuParsed && !isMemoryParsed && !uptimeString && !sessMatch) {
+      throw new Error("Unable to parse CPU, Memory, or Uptime from performance status output.");
+    }
+
     return {
       cpuUserPct,
       cpuSystemPct,
@@ -210,6 +216,8 @@ export class FortiGateParser implements IVendorParser {
       activeSessionsCount,
       uptimeSeconds,
       uptimeString,
+      isCpuParsed,
+      isMemoryParsed,
     };
   }
 
@@ -449,20 +457,28 @@ export class FortiGateParser implements IVendorParser {
     const healthMatch = output.match(/HA Health Status:\s*([a-zA-Z0-9_\-]+)/i);
     const syncMatch = output.match(/Configuration status:\s*([a-zA-Z0-9_\-]+)/i);
 
-    const rawMode = modeMatch ? modeMatch[1].toLowerCase() : "standalone";
-    let haMode: "STANDALONE" | "ACTIVE_PASSIVE" | "ACTIVE_ACTIVE" | "UNKNOWN" =
-      "STANDALONE";
+    const isExplicitStandalone =
+      /standalone|ha is not enabled|not enabled|ha mode:\s*standalone/i.test(output);
 
-    if (rawMode.includes("a-p") || rawMode.includes("active-passive")) {
-      haMode = "ACTIVE_PASSIVE";
-    } else if (rawMode.includes("a-a") || rawMode.includes("active-active")) {
-      haMode = "ACTIVE_ACTIVE";
+    let haMode: "STANDALONE" | "ACTIVE_PASSIVE" | "ACTIVE_ACTIVE" | "UNKNOWN" = "UNKNOWN";
+
+    if (modeMatch) {
+      const rawMode = modeMatch[1].toLowerCase();
+      if (rawMode.includes("a-p") || rawMode.includes("active-passive")) {
+        haMode = "ACTIVE_PASSIVE";
+      } else if (rawMode.includes("a-a") || rawMode.includes("active-active")) {
+        haMode = "ACTIVE_ACTIVE";
+      } else if (rawMode.includes("standalone") || rawMode.includes("disable")) {
+        haMode = "STANDALONE";
+      }
+    } else if (isExplicitStandalone) {
+      haMode = "STANDALONE";
     }
 
-    const isCluster = haMode !== "STANDALONE";
+    const isCluster = haMode === "ACTIVE_PASSIVE" || haMode === "ACTIVE_ACTIVE";
     const isSynchronized = syncMatch
       ? syncMatch[1].toLowerCase() === "in-sync"
-      : !isCluster;
+      : (haMode === "STANDALONE");
 
     const members: HaMemberMetric[] = [];
     const masterMatch = output.match(
@@ -566,18 +582,26 @@ export class FortiGateParser implements IVendorParser {
   }
 
   private parseFazConnectivity(output: string): LogManagerMetrics {
-    const ipMatch = output.match(/FortiAnalyzer IP:\s*([0-9\.]+)/i);
-    const connMatch = output.match(/Connection state:\s*([a-zA-Z]+)/i);
+    const ipMatch = output.match(/(?:FortiAnalyzer IP|IP Address|Server IP|IP):\s*([0-9\.]+)/i);
+    const connMatch = output.match(/(?:Connection state|Connectivity status|Status|State):\s*([a-zA-Z\/-]+)/i);
     const sslMatch = output.match(/SSL handshake:\s*([a-zA-Z]+)/i);
     const regMatch = output.match(/Registration status:\s*([a-zA-Z]+)/i);
 
-    const isConnected = connMatch
-      ? connMatch[1].toLowerCase() === "connected"
-      : false;
+    const isExplicitlyUnconfigured =
+      /not configured|disabled|no fortianalyzer|unconfigured/i.test(output);
+
+    let connectionState: "CONNECTED" | "UNREACHABLE" | "UNCONFIGURED" = "UNCONFIGURED";
+    if (isExplicitlyUnconfigured || (!ipMatch && !connMatch)) {
+      connectionState = "UNCONFIGURED";
+    } else if (connMatch && connMatch[1].toLowerCase().includes("connected") && !connMatch[1].toLowerCase().includes("unconnected")) {
+      connectionState = "CONNECTED";
+    } else {
+      connectionState = "UNREACHABLE";
+    }
 
     return {
       targetIp: ipMatch ? ipMatch[1] : undefined,
-      connectionState: isConnected ? "CONNECTED" : "UNREACHABLE",
+      connectionState,
       sslHandshakeOk: sslMatch ? sslMatch[1].toLowerCase() === "ok" : false,
       registrationStatus: regMatch ? regMatch[1] : undefined,
     };

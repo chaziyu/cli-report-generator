@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { storage } from "@/lib/storage";
 import { vendorRegistry, VendorId } from "@/vendors";
-import { logNormalizer, commandSegmenter, deviceMapper } from "@/core/cli";
+import { logNormalizer, commandSegmenter, deviceMapper, persistCommandSegments } from "@/core/cli";
 
 export const dynamic = "force-dynamic";
 
@@ -94,45 +94,32 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
       deviceCandidates
     );
 
+    if (targetDeviceId && !session.devices.some((d) => d.id === targetDeviceId)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Cross-session violation: target device "${targetDeviceId}" does not belong to session "${sessionId}".`,
+        },
+        { status: 400 }
+      );
+    }
+
     const resolvedDeviceId =
       targetDeviceId ||
       (!mappingResult.requiresConfirmation ? mappingResult.matchedDeviceId : undefined);
 
     let savedCount = 0;
 
-    // 7. If device is resolved, persist CommandExecution records in DB
+    // 7. If device is resolved, idempotently persist CommandExecution records in DB
     if (resolvedDeviceId) {
-      // Find command definitions to match groups
-      const commands = vendorAdapter.getCommands();
-      const commandGroupMap = new Map<string, string>();
-      for (const cmd of commands) {
-        commandGroupMap.set(cmd.id, cmd.group);
-      }
-
-      // Upsert/create CommandExecution records
-      for (const seg of segmentedLog.segments) {
-        const group = seg.commandId ? commandGroupMap.get(seg.commandId) : undefined;
-
-        await prisma.commandExecution.create({
-          data: {
-            deviceId: resolvedDeviceId,
-            command: seg.command,
-            commandGroup: group || null,
-            executionContext: seg.executionContext || null,
-            rawOutputRef: seg.id,
-            outputContent: seg.rawOutput,
-            parseStatus: seg.commandStatus,
-            parseError: seg.errorMessage || null,
-          },
-        });
-        savedCount++;
-      }
-
-      // Associate uploaded file with resolved device
-      await prisma.uploadedFile.update({
-        where: { id: uploadedFile.id },
-        data: { deviceId: resolvedDeviceId },
+      const persistResult = await persistCommandSegments({
+        sessionId,
+        deviceId: resolvedDeviceId,
+        sourceFileId: uploadedFile.id,
+        segments: segmentedLog.segments,
+        adapter: vendorAdapter,
       });
+      savedCount = persistResult.savedCount;
     }
 
     return NextResponse.json({
